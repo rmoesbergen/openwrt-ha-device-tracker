@@ -4,7 +4,7 @@
 I got fed up with all the Home Assistant device tracking solution for OpenWRT that just didn't work reliably, so I created my own.
 This little script runs on the OpenWRT device, polls the currently connected WiFi clients and updates their status in
 Home Assistant by calling the Home Assistant REST API. It only sends API requests on device join/leave. It handles connectivity
-issues with Home Assistant gracefully and ensures that device state is alway in sync, even after restarts, etc.
+issues with Home Assistant gracefully and ensures that device state is always in sync, even after restarts, connectivity loss, etc.
 
 ## Installation ##
 
@@ -14,7 +14,7 @@ issues with Home Assistant gracefully and ensures that device state is alway in 
 * Adjust settings.json to your needs (see below)
 * run device.py (in a screen for now)
 
-Making it a proper daemon is on the todo list..
+Making it a proper daemon with an init script is on the todo list..
 
 ## Configuration ##
 The settings file looks like this:
@@ -33,10 +33,10 @@ The settings file looks like this:
 
 Some settings will need a bit of explaining:
 * hass_url: The URL to your Home Assistant device, including the port (8123 is the default Hass.io port)
-* hass_token: This is a Home Assistant 'Long-lived token'. You can create it in the HA web-ui by clicking in your user-name,
+* hass_token: This is a Home Assistant 'Long-lived token'. You can create it in the HA web-ui by clicking on your user-name,
   then scolling all the way down to 'Long-lived tokens' and clicking 'Create Token'
-* interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd' (it's the ubus service name)
+* interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd.' (it's the ubus service name)
 * offline_after: Set a device as not_home after is has been absent for this many poll intervals
 * full_sync_polls: Re-sync the device state of all devices every X poll intervals. This is to ensure device state is in sync,
-  even after HA restarts or events are missed etc.
-* debug: Enable of disable debugging (prints state information on stdout when enabled)
+  even after HA restarts, connectivity loss, or missed events.
+* debug: Enable or disable debugging (prints state information on stdout when enabled)
