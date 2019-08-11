@@ -1,12 +1,4 @@
-{
-  "hass_url": "http://hassio.local:8123",
-  "hass_token" : "<Home Assistant REST API Bearer Token>",
-  "interfaces": ["hostapd.wlan0", "hostapd.wlan1"],
-  "offline_after": 3,
-  "poll_interval": 15,
-  "full_sync_polls": 10,
-  "debug": false
-}# OpenWRT Home Assistant device tracker
+# OpenWRT Home Assistant device tracker
 
 ## What's this? ##
 I got fed up with all the Home Assistant device tracking solution for OpenWRT that just didn't work reliably, so I created my own.
