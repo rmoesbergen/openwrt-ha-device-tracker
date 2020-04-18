@@ -5,12 +5,27 @@ import subprocess
 import requests
 import json
 import time
+import argparse
+import syslog
+
+
+class Logger:
+    def __init__(self, enable_debug):
+        self.enable_debug = enable_debug
+
+    def log(self, text, is_debug=False):
+        if is_debug and not self.enable_debug:
+            return
+
+        level = syslog.LOG_DEBUG if is_debug else syslog.LOG_INFO
+        syslog.openlog(ident="presense-detector", facility=syslog.LOG_DAEMON, logoption=syslog.LOG_PID)
+        syslog.syslog(level, text)
 
 
 class Settings:
-    def __init__(self):
+    def __init__(self, config_file):
         self._settings = {}
-        with open('settings.json', 'r') as settings:
+        with open(config_file, 'r') as settings:
             self._settings = json.load(settings)
 
     def __getattr__(self, item):
@@ -18,8 +33,9 @@ class Settings:
 
 
 class PresenceDetector:
-    def __init__(self):
-        self.settings = Settings()
+    def __init__(self, config_file):
+        self.settings = Settings(config_file)
+        self.logger = Logger(self.settings.debug)
         self.full_sync_counter = self.settings.full_sync_polls
         self.clients_seen = {}
 
@@ -32,11 +48,9 @@ class PresenceDetector:
         try:
             response = requests.post(f'{self.settings.hass_url}/api/services/device_tracker/see', json=body,
                                      headers={'Authorization': f'Bearer {self.settings.hass_token}'})
-            if self.settings.debug:
-                print(response.content)
+            self.logger.log(f"API Response: {response.content}", is_debug=True)
         except Exception as e:
-            if self.settings.debug:
-                print(str(e))
+            self.logger.log(str(e), is_debug=True)
             # Force full sync when HA returns
             self.full_sync_counter = 0
             return False
@@ -53,7 +67,7 @@ class PresenceDetector:
             ok = True
             for client in self.clients_seen:
                 if self.clients_seen[client] == self.settings.offline_after:
-                    print(f"full sync {client}")
+                    self.logger.log(f"full sync {client}")
                     ok &= self.ha_seen(client)
             # Reset timer only when all syncs were successful
             if ok:
@@ -66,6 +80,7 @@ class PresenceDetector:
                 self.clients_seen[client] -= 1
                 if self.clients_seen[client] <= 0:
                     # Has not been seen x times, mark as away
+                    self.logger.log(f"Device {client} is now away")
                     if self.ha_seen(client, False):
                         to_delete.append(client)
                     else:
@@ -82,6 +97,7 @@ class PresenceDetector:
                     clients = json.loads(process.stdout)
                     for client in clients['clients']:
                         if client not in self.clients_seen:
+                            self.logger.log(f"Device {client} is now home")
                             if self.ha_seen(client):
                                 self.clients_seen[client] = self.settings.offline_after
                         else:
@@ -90,10 +106,13 @@ class PresenceDetector:
             time.sleep(self.settings.poll_interval)
             self.full_sync()
 
-            if self.settings.debug:
-                print(self.clients_seen)
+            self.logger.log(f"Clients seen: {self.clients_seen}", is_debug=True)
 
 
 if __name__ == "__main__":
-    detector = PresenceDetector()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--config", help="Filename of configuration file", default="/etc/config/settings.json")
+    args = parser.parse_args()
+
+    detector = PresenceDetector(args.config)
     detector.polling_loop()
