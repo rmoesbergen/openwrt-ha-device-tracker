@@ -13,6 +13,7 @@ issues with Home Assistant gracefully and ensures that device state is always in
 * Place the init-script from this repo's init.d directory into /etc/init.d on your device
 * Install python + deps: opkg update && opkg install python3-requests
 * Adjust settings.json to your needs (see below)
+* run 'service presence-detector enable' to enable the service at startup
 * run 'service presence-detector start', or simply reboot
 
 ## Configuration ##
