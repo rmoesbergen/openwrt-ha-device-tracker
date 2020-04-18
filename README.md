@@ -9,12 +9,11 @@ issues with Home Assistant gracefully and ensures that device state is always in
 ## Installation ##
 
 * Log in to your OpenWRT device
-* Place device.py and settings.json somewhere persistent (I use /etc/config)
+* Place presence-detector.py and settings.json somewhere persistent (I use /etc/config)
+* Place the init-script from this repo's init.d directory into /etc/init.d on your device
 * Install python + deps: opkg update && opkg install python3-requests
 * Adjust settings.json to your needs (see below)
-* run device.py (in a screen for now)
-
-Making it a proper daemon with an init script is on the todo list..
+* run 'service presence-detector start', or simply reboot
 
 ## Configuration ##
 The settings file looks like this:
@@ -40,3 +39,7 @@ Some settings will need a bit of explaining:
 * full_sync_polls: Re-sync the device state of all devices every X poll intervals. This is to ensure device state is in sync,
   even after HA restarts, connectivity loss, or missed events.
 * debug: Enable or disable debugging (prints state information on stdout when enabled)
+
+## Logging ##
+The program will run as a 'service' in the background and will log interesting events to syslog.
+You can read these events by running 'logread' on your device, or using your favorite web-ui. 
