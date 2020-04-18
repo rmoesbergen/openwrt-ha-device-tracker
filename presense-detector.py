@@ -67,7 +67,7 @@ class PresenceDetector:
             ok = True
             for client in self.clients_seen:
                 if self.clients_seen[client] == self.settings.offline_after:
-                    self.logger.log(f"full sync {client}")
+                    self.logger.log(f"full sync {client}", is_debug=True)
                     ok &= self.ha_seen(client)
             # Reset timer only when all syncs were successful
             if ok:
