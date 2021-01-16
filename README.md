@@ -10,6 +10,7 @@ issues with Home Assistant gracefully and ensures that device state is always in
 
 * Log in to your OpenWRT device
 * Place presence-detector.py and settings.json somewhere persistent (I use /etc/config)
+* Make presence-detector.py executable: chmod +x presence-detector.py
 * Place the init-script from this repo's init.d directory into /etc/init.d on your device
 * Install python + deps: opkg update && opkg install python3-requests
 * Adjust settings.json to your needs (see below)
@@ -27,6 +28,7 @@ The settings file looks like this:
   "offline_after": 3,
   "poll_interval": 15,
   "full_sync_polls": 10,
+  "ap_name": "",
   "debug": false
 }
 ```
@@ -37,8 +39,10 @@ Some settings will need a bit of explaining:
   then scolling all the way down to 'Long-lived tokens' and clicking 'Create Token'
 * interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd.' (it's the ubus service name)
 * offline_after: Set a device as not_home after is has been absent for this many poll intervals
+* poll_interval: Poll interval in seconds
 * full_sync_polls: Re-sync the device state of all devices every X poll intervals. This is to ensure device state is in sync,
   even after HA restarts, connectivity loss, or missed events.
+* ap_name: If only one access point, leave as "". If script should run on multiple access points, give a name here, e.g. "ap1". The mac address will be prefixed by this on HA.
 * debug: Enable or disable debugging (prints state information on stdout when enabled)
 
 ## Logging ##
