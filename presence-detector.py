@@ -97,7 +97,8 @@ class PresenceDetector:
                     clients = json.loads(process.stdout)
                     for client in clients['clients']:
                         # Add ap prefix if ap_name defined in settings
-                        if bool(self.settings.ap_name):
+                        if self.settings.ap_name:
+                            client = f"{self.settings.ap_name}_{client}"
                             ap = self.settings.ap_name + '_'
                             client = ap + client
                         if client not in self.clients_seen:
