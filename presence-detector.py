@@ -46,6 +46,11 @@ class PresenceDetector:
 
         body = {"mac": client, "location_name": location}
         try:
+            body.update(self.settings.params[client])
+        except:
+            pass
+
+        try:
             response = requests.post(f'{self.settings.hass_url}/api/services/device_tracker/see', json=body,
                                      headers={'Authorization': f'Bearer {self.settings.hass_token}'})
             self.logger.log(f"API Response: {response.content}", is_debug=True)
