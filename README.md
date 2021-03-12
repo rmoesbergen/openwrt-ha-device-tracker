@@ -25,25 +25,37 @@ The settings file looks like this:
   "hass_url": "http://hassio.local:8123",
   "hass_token" : "<Home Assistant REST API Bearer Token>",
   "interfaces": ["hostapd.wlan0", "hostapd.wlan1"],
+  "do_not_track": ["01:23:45:67:89:ab"],
+  "params": {
+    "00:00:00:00:00:00": {
+      "mac": "ff:ff:ff:ff:ff:ff",
+      "hostname": "Dave",
+      "dev_id": "phonedave"
+    }
+  }
   "offline_after": 3,
   "poll_interval": 15,
   "full_sync_polls": 10,
   "ap_name": "",
+  "zone": "my_zone",
   "debug": false
 }
 ```
 
 Some settings will need a bit of explaining:
-* hass_url: The URL to your Home Assistant device, including the port (8123 is the default Hass.io port)
+* hass_url: The URL to your Home Assistant device, including the port (8123 is the default Hass.io port).
 * hass_token: This is a Home Assistant 'Long-lived token'. You can create it in the HA web-ui by clicking on your user-name,
-  then scolling all the way down to 'Long-lived tokens' and clicking 'Create Token'
-* interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd.' (it's the ubus service name)
-* offline_after: Set a device as not_home after is has been absent for this many poll intervals
-* poll_interval: Poll interval in seconds
+  then scolling all the way down to 'Long-lived tokens' and clicking 'Create Token'.
+* interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd.' (it's the ubus service name).
+* do_not_track: This is an array of devices to ignore.
+* params: A dictionary containing additional parameters for specific devices. Those are sent together with MAC address and location name. Note here you could also override MAC and location name. For information on which keys you can add, see [here](https://www.home-assistant.io/integrations/device_tracker/#device_trackersee-service).
+* offline_after: Set a device as not_home after is has been absent for this many poll intervals.
+* poll_interval: Poll interval in seconds.
 * full_sync_polls: Re-sync the device state of all devices every X poll intervals. This is to ensure device state is in sync,
   even after HA restarts, connectivity loss, or missed events.
 * ap_name: If only one access point, leave as "". If script should run on multiple access points, give a name here, e.g. "ap1". The mac address will be prefixed by this on HA.
-* debug: Enable or disable debugging (prints state information on stdout when enabled)
+* zone: Custom zone name to be assigned to spotted devices.
+* debug: Enable or disable debugging (prints state information on stdout when enabled).
 
 ## Logging ##
 The program will run as a 'service' in the background and will log interesting events to syslog.
