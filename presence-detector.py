@@ -96,6 +96,8 @@ class PresenceDetector:
                 if process.returncode == 0:
                     clients = json.loads(process.stdout)
                     for client in clients['clients']:
+                        if client in self.settings.do_not_track:
+                            continue
                         # Add ap prefix if ap_name defined in settings
                         if self.settings.ap_name:
                             client = f"{self.settings.ap_name}_{client}"
