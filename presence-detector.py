@@ -18,7 +18,7 @@ class Logger:
             return
 
         level = syslog.LOG_DEBUG if is_debug else syslog.LOG_INFO
-        syslog.openlog(ident="presense-detector", facility=syslog.LOG_DAEMON, logoption=syslog.LOG_PID)
+        syslog.openlog(ident="presence-detector", facility=syslog.LOG_DAEMON, logoption=syslog.LOG_PID)
         syslog.syslog(level, text)
 
 
