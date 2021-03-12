@@ -40,9 +40,9 @@ class PresenceDetector:
         self.clients_seen = {}
 
     def ha_seen(self, client, seen=True):
-        location = "home"
+        location = self.settings.zone
         if not seen:
-            location = "not_home"
+            location = "unknown"
 
         body = {"mac": client, "location_name": location}
         try:
@@ -102,7 +102,7 @@ class PresenceDetector:
                         if self.settings.ap_name:
                             client = f"{self.settings.ap_name}_{client}"
                         if client not in self.clients_seen:
-                            self.logger.log(f"Device {client} is now home")
+                            self.logger.log(f"Device {client} is now at {self.settings.zone}")
                             if self.ha_seen(client):
                                 self.clients_seen[client] = self.settings.offline_after
                         else:
