@@ -32,7 +32,7 @@ The settings file looks like this:
       "hostname": "Dave",
       "dev_id": "phonedave"
     }
-  }
+  },
   "offline_after": 3,
   "poll_interval": 15,
   "full_sync_polls": 10,
