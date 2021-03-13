@@ -24,9 +24,16 @@ class Logger:
 
 class Settings:
     def __init__(self, config_file):
-        self._settings = {}
+        self._settings = {
+            "hass_url": "http://homeassistant.local:8123",
+            "interfaces": ["hostapd.wlan0"],
+            "offline_after": 3,
+            "poll_interval": 15,
+            "full_sync_polls": 10,
+            "debug": False
+        }
         with open(config_file, 'r') as settings:
-            self._settings = json.load(settings)
+            self._settings.update(json.load(settings))
 
     def __getattr__(self, item):
         return self._settings.get(item)
