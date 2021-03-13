@@ -15,5 +15,6 @@
   "full_sync_polls": 10,
   "ap_name": "",
   "location": "home",
+  "away": "not_home",
   "debug": false
 }

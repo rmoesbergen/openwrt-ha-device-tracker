@@ -38,6 +38,7 @@ The settings file looks like this:
   "full_sync_polls": 10,
   "ap_name": "",
   "location": "home",
+  "away": "not_home",
   "debug": false
 }
 ```
@@ -55,6 +56,7 @@ Some settings will need a bit of explaining:
   even after HA restarts, connectivity loss, or missed events.
 * ap_name: If only one access point, leave as "". If script should run on multiple access points, give a name here, e.g. "ap1". The mac address will be prefixed by this on HA.
 * location: Custom location name to be assigned to spotted devices.
+* away: Custom location name to be sent when a device is no more connected.
 * debug: Enable or disable debugging (prints state information on stdout when enabled).
 
 ## Logging ##

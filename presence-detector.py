@@ -33,6 +33,7 @@ class Settings:
             "poll_interval": 15,
             "full_sync_polls": 10,
             "location": "home",
+            "away": "not_home",
             "debug": False
         }
         with open(config_file, 'r') as settings:
@@ -50,9 +51,10 @@ class PresenceDetector:
         self.clients_seen = {}
 
     def ha_seen(self, client, seen=True):
-        location = self.settings.location
-        if not seen:
-            location = "unknown"
+        if seen:
+            location = self.settings.location
+        else:
+            location = self.settings.away
 
         body = {"mac": client, "location_name": location}
         if client in self.settings.params:
