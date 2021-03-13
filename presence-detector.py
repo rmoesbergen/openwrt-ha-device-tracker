@@ -55,10 +55,8 @@ class PresenceDetector:
             location = "unknown"
 
         body = {"mac": client, "location_name": location}
-        try:
+        if client in self.settings.params:
             body.update(self.settings.params[client])
-        except:
-            pass
 
         try:
             response = requests.post(f'{self.settings.hass_url}/api/services/device_tracker/see', json=body,
