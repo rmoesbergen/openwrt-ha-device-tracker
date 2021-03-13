@@ -32,7 +32,7 @@ class Settings:
             "offline_after": 3,
             "poll_interval": 15,
             "full_sync_polls": 10,
-            "zone": "home",
+            "location": "home",
             "debug": False
         }
         with open(config_file, 'r') as settings:
@@ -50,7 +50,7 @@ class PresenceDetector:
         self.clients_seen = {}
 
     def ha_seen(self, client, seen=True):
-        location = self.settings.zone
+        location = self.settings.location
         if not seen:
             location = "unknown"
 
@@ -115,7 +115,7 @@ class PresenceDetector:
                         if self.settings.ap_name:
                             client = f"{self.settings.ap_name}_{client}"
                         if client not in self.clients_seen:
-                            self.logger.log(f"Device {client} is now at {self.settings.zone}")
+                            self.logger.log(f"Device {client} is now at {self.settings.location}")
                             if self.ha_seen(client):
                                 self.clients_seen[client] = self.settings.offline_after
                         else:
