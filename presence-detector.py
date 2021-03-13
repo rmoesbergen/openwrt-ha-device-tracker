@@ -27,9 +27,12 @@ class Settings:
         self._settings = {
             "hass_url": "http://homeassistant.local:8123",
             "interfaces": ["hostapd.wlan0"],
+            "do_not_track": [],
+            "params": {},
             "offline_after": 3,
             "poll_interval": 15,
             "full_sync_polls": 10,
+            "zone": "home",
             "debug": False
         }
         with open(config_file, 'r') as settings:
