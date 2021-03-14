@@ -18,7 +18,7 @@ class Logger:
             return
 
         level = syslog.LOG_DEBUG if is_debug else syslog.LOG_INFO
-        syslog.openlog(ident="presense-detector", facility=syslog.LOG_DAEMON, logoption=syslog.LOG_PID)
+        syslog.openlog(ident="presence-detector", facility=syslog.LOG_DAEMON, logoption=syslog.LOG_PID)
         syslog.syslog(level, text)
 
 
@@ -27,9 +27,13 @@ class Settings:
         self._settings = {
             "hass_url": "http://homeassistant.local:8123",
             "interfaces": ["hostapd.wlan0"],
+            "do_not_track": [],
+            "params": {},
             "offline_after": 3,
             "poll_interval": 15,
             "full_sync_polls": 10,
+            "location": "home",
+            "away": "not_home",
             "debug": False
         }
         with open(config_file, 'r') as settings:
@@ -47,11 +51,15 @@ class PresenceDetector:
         self.clients_seen = {}
 
     def ha_seen(self, client, seen=True):
-        location = "home"
-        if not seen:
-            location = "not_home"
+        if seen:
+            location = self.settings.location
+        else:
+            location = self.settings.away
 
         body = {"mac": client, "location_name": location}
+        if client in self.settings.params:
+            body.update(self.settings.params[client])
+
         try:
             response = requests.post(f'{self.settings.hass_url}/api/services/device_tracker/see', json=body,
                                      headers={'Authorization': f'Bearer {self.settings.hass_token}'})
@@ -103,11 +111,13 @@ class PresenceDetector:
                 if process.returncode == 0:
                     clients = json.loads(process.stdout)
                     for client in clients['clients']:
+                        if client in self.settings.do_not_track:
+                            continue
                         # Add ap prefix if ap_name defined in settings
                         if self.settings.ap_name:
                             client = f"{self.settings.ap_name}_{client}"
                         if client not in self.clients_seen:
-                            self.logger.log(f"Device {client} is now home")
+                            self.logger.log(f"Device {client} is now at {self.settings.location}")
                             if self.ha_seen(client):
                                 self.clients_seen[client] = self.settings.offline_after
                         else:
