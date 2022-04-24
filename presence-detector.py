@@ -3,10 +3,12 @@
 
 import subprocess
 import json
+import signal
 import time
 import argparse
 import syslog
-from typing import Dict, Any
+from typing import Dict, Any, List
+from threading import Thread
 import requests
 
 
@@ -44,112 +46,178 @@ class Settings:
         with open(config_file, "r", encoding="utf-8") as settings:
             self._settings.update(json.load(settings))
 
-    def __getattr__(self, item: str) -> Dict[str, Any]:
+    def __getattr__(self, item: str) -> Any:
         return self._settings.get(item)
 
 
-class PresenceDetector:
+class PresenceDetector(Thread):
     def __init__(self, config_file: str) -> None:
-        self.settings = Settings(config_file)
-        self.logger = Logger(self.settings.debug)
-        self.full_sync_counter = self.settings.full_sync_polls
-        self.clients_seen: Dict[str, int] = {}
+        super().__init__()
+        self._settings = Settings(config_file)
+        self._logger = Logger(self._settings.debug)
+        self._full_sync_counter = self._settings.full_sync_polls
+        self._clients_seen: Dict[str, int] = {}
+        self._watchers: List[UbusWatcher] = []
+        self._killed = False
 
-    def ha_seen(self, client: str, seen: bool = True) -> bool:
+    def _ha_seen(self, client: str, seen: bool = True) -> bool:
         if seen:
-            location = self.settings.location
+            location = self._settings.location
         else:
-            location = self.settings.away
+            location = self._settings.away
 
         body = {"mac": client, "location_name": location}
-        if client in self.settings.params:
-            body.update(self.settings.params[client])
+        if client in self._settings.params:
+            body.update(self._settings.params[client])
 
         try:
             response = requests.post(
-                f"{self.settings.hass_url}/api/services/device_tracker/see",
+                f"{self._settings.hass_url}/api/services/device_tracker/see",
                 json=body,
-                headers={"Authorization": f"Bearer {self.settings.hass_token}"},
+                headers={"Authorization": f"Bearer {self._settings.hass_token}"},
             )
-            self.logger.log(f"API Response: {response.content!r}", is_debug=True)
+            self._logger.log(f"API Response: {response.content!r}", is_debug=True)
         except Exception as e:
-            self.logger.log(str(e), is_debug=True)
+            self._logger.log(str(e), is_debug=True)
             # Force full sync when HA returns
-            self.full_sync_counter = 0
+            self._full_sync_counter = 0
             return False
 
         if not response.ok:
-            self.full_sync_counter = 0
+            self._full_sync_counter = 0
 
         return response.ok
 
     def full_sync(self) -> None:
         # Sync state of all devices once every X polls
-        self.full_sync_counter -= 1
-        if self.full_sync_counter <= 0:
+        self._full_sync_counter -= 1
+        if self._full_sync_counter <= 0:
             ok = True
-            for client, offline_after in self.clients_seen.items():
-                if offline_after == self.settings.offline_after:
-                    self.logger.log(f"full sync {client}", is_debug=True)
-                    ok &= self.ha_seen(client)
+            for client, offline_after in self._clients_seen.items():
+                if offline_after == self._settings.offline_after:
+                    self._logger.log(f"full sync {client}", is_debug=True)
+                    ok &= self._ha_seen(client)
             # Reset timer only when all syncs were successful
             if ok:
-                self.full_sync_counter = self.settings.full_sync_polls
+                self._full_sync_counter = self._settings.full_sync_polls
 
-    def polling_loop(self) -> None:
-        while True:
-            to_delete = []
-            for client in self.clients_seen:
-                self.clients_seen[client] -= 1
-                if self.clients_seen[client] <= 0:
-                    # Has not been seen x times, mark as away
-                    self.logger.log(f"Device {client} is now away")
-                    if self.ha_seen(client, False):
-                        to_delete.append(client)
-                    else:
-                        # Call failed -> retry next time
-                        self.clients_seen[client] = 1
+    def set_client_away(self, client: str) -> None:
+        self._logger.log(f"Device {client} is now away")
+        ok = self._ha_seen(client, False)
+        if ok:
+            # Away call to HA was successful -> remove from list
+            del self._clients_seen[client]
+        else:
+            # Call failed -> retry next time
+            self._clients_seen[client] = 1
 
-            for del_client in to_delete:
-                del self.clients_seen[del_client]
+    def set_client_home(self, client: str):
+        if client in self._settings.do_not_track:
+            return
+        # Add ap prefix if ap_name defined in settings
+        if self._settings.ap_name:
+            client = f"{self._settings.ap_name}_{client}"
+        if client not in self._clients_seen:
+            self._logger.log(f"Device {client} is now at {self._settings.location}")
+            if self._ha_seen(client):
+                self._clients_seen[client] = self._settings.offline_after
+        else:
+            self._clients_seen[client] = self._settings.offline_after
 
-            # Reset seen clients to 'offline_after'
-            for interface in self.settings.interfaces:
-                process = subprocess.run(
-                    ["ubus", "call", interface, "get_clients"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
+    def _get_all_online_clients(self) -> Dict[str, Any]:
+        # Reset seen clients to 'offline_after'
+        clients = {}
+        for interface in self._settings.interfaces:
+            process = subprocess.run(
+                ["ubus", "call", interface, "get_clients"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if process.returncode != 0:
+                self._logger.log(
+                    f"Error running ubus for interface {interface}: {process.stderr}"
                 )
-                if process.returncode != 0:
-                    self.logger.log(
-                        f"Error running ubus for interface {interface}: {process.stderr}"
-                    )
+                continue
+            clients.update(json.loads(process.stdout))
+        return clients["clients"]
+
+    def start_watchers(self):
+        for interface in self._settings.interfaces:
+            # Start an ubus watcher for every interface
+            watcher = UbusWatcher(interface, self)
+            watcher.start()
+            self._watchers.append(watcher)
+
+    def stop_watchers(self):
+        # Signal all watchers to stop
+        for watcher in self._watchers:
+            watcher.stop()
+
+    @property
+    def stopped(self):
+        return self._killed
+
+    def stop(self, *args):
+        self._logger.log("Stopping...")
+        self.stop_watchers()
+        self._killed = True
+
+    def run(self) -> None:
+        # Start ubus watcher(s) for every interface
+        self.start_watchers()
+
+        # The main (sync) polling loop
+        while not self._killed:
+            for client in self._clients_seen.copy():
+                self._clients_seen[client] -= 1
+                if self._clients_seen[client] > 0:
                     continue
+                # Client has not been seen x times, mark as away
+                self.set_client_away(client)
 
-                clients = json.loads(process.stdout)
-                for client in clients["clients"]:
-                    if client in self.settings.do_not_track:
-                        continue
-                    # Add ap prefix if ap_name defined in settings
-                    if self.settings.ap_name:
-                        client = f"{self.settings.ap_name}_{client}"
-                    if client not in self.clients_seen:
-                        self.logger.log(
-                            f"Device {client} is now at {self.settings.location}"
-                        )
-                        if self.ha_seen(client):
-                            self.clients_seen[client] = self.settings.offline_after
-                    else:
-                        self.clients_seen[client] = self.settings.offline_after
+            for client in self._get_all_online_clients():
+                self.set_client_home(client)
 
-            time.sleep(self.settings.poll_interval)
+            time.sleep(self._settings.poll_interval)
             self.full_sync()
 
-            self.logger.log(f"Clients seen: {self.clients_seen}", is_debug=True)
+            self._logger.log(f"Clients seen: {self._clients_seen}", is_debug=True)
 
 
-if __name__ == "__main__":
+class UbusWatcher(Thread):
+    """Watches live ubus events and signals presence detector of leave/join events"""
+
+    def __init__(self, interface: str, detector: PresenceDetector) -> None:
+        super().__init__()
+        self._detector = detector
+        self._interface = interface
+        self._killed = False
+
+    def stop(self):
+        self._killed = True
+
+    def run(self) -> None:
+        ubus = subprocess.Popen(
+            ["ubus", "subscribe", self._interface], stdout=subprocess.PIPE, text=True
+        )
+        if not ubus.stdout:
+            return
+        for line in iter(ubus.stdout.readline, "{}"):
+            if self._killed:
+                ubus.kill()
+                return
+            event = {}
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                # Ignore incomplete / invalid json
+                pass
+            if "assoc" in event:
+                self._detector.set_client_home(event["assoc"]["address"])
+
+
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-c",
@@ -160,4 +228,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     detector = PresenceDetector(args.config)
-    detector.polling_loop()
+    detector.start()
+    signal.signal(signal.SIGTERM, detector.stop)
+    signal.signal(signal.SIGINT, detector.stop)
+
+    while not detector.stopped:
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()
