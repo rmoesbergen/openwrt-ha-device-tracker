@@ -139,8 +139,9 @@ class PresenceDetector(Thread):
                     f"Error running ubus for interface {interface}: {process.stderr}"
                 )
                 continue
-            clients.update(json.loads(process.stdout))
-        return clients["clients"]
+            response = json.loads(process.stdout)
+            clients.update(response["clients"])
+        return clients
 
     def start_watchers(self):
         for interface in self._settings.interfaces:
