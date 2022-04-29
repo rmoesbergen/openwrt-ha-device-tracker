@@ -219,7 +219,8 @@ class UbusWatcher(Thread):
                 pass
             if "assoc" in event:
                 self._detector.set_client_home(event["assoc"]["address"])
-
+            elif "disassoc" in event and self._detector._settings.offline_after <= 1:
+                self._detector.set_client_away(event["disassoc"]["address"])
 
 def main():
     parser = argparse.ArgumentParser()
