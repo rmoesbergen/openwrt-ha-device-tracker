@@ -170,15 +170,18 @@ class PresenceDetector(Thread):
 
         # The main (sync) polling loop
         while not self._killed:
+            seen_now = self._get_all_online_clients()
+            for client in seen_now:
+                self.set_client_home(client)
+
             for client in self._clients_seen.copy():
+                if client in seen_now:
+                    continue
                 self._clients_seen[client] -= 1
                 if self._clients_seen[client] > 0:
                     continue
                 # Client has not been seen x times, mark as away
                 self.set_client_away(client)
-
-            for client in self._get_all_online_clients():
-                self.set_client_home(client)
 
             time.sleep(self._settings.poll_interval)
             self.full_sync()
