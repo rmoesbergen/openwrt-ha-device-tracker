@@ -66,7 +66,7 @@ class PresenceDetector(Thread):
         else:
             location = self._settings.away
 
-        body = {"mac": client, "location_name": location}
+        body = {"mac": client, "location_name": location, "source_type": "router"}
         if client in self._settings.params:
             body.update(self._settings.params[client])
 
