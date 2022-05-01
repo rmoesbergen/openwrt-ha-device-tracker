@@ -50,14 +50,14 @@ Some settings will need a bit of explaining:
 * interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd.' (it's the ubus service name).
 * do_not_track: This is an array of devices to ignore.
 * params: A dictionary containing additional parameters for specific devices. Those are sent together with MAC address and location name. Note here you could also override MAC and location name. For information on which keys you can add, see [here](https://www.home-assistant.io/integrations/device_tracker/#device_trackersee-service).
-* offline_after: Set a device as not_home after is has been absent for this many poll intervals.
-* poll_interval: Poll interval in seconds.
+* offline_after: Set a device as not_home after is has been absent for this many poll intervals. Set this to 1 to immediately notify HA when a device leaves the network. Default: 3
+* poll_interval: Poll interval in seconds. Default: 15
 * full_sync_polls: Re-sync the device state of all devices every X poll intervals. This is to ensure device state is in sync,
-  even after HA restarts, connectivity loss, or missed events.
+  even after HA restarts, connectivity loss, or missed events. Default: 10
 * ap_name: If only one access point, leave as "". If script should run on multiple access points, give a name here, e.g. "ap1". The mac address will be prefixed by this on HA.
-* location: Custom location name to be assigned to spotted devices.
-* away: Custom location name to be sent when a device is no more connected.
-* debug: Enable or disable debugging (prints state information on stdout when enabled).
+* location: Custom location name to be assigned to spotted devices. Default: "home"
+* away: Custom location name to be sent when a device is no more connected. Default: "not_home"
+* debug: Enable or disable debugging (prints state information on stdout when enabled). Default: false
 
 ## Logging ##
 The program will run as a 'service' in the background and will log interesting events to syslog.
