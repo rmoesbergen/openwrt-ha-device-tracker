@@ -7,7 +7,7 @@ import signal
 import time
 import argparse
 import syslog
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 from threading import Thread
 import requests
 
@@ -77,8 +77,8 @@ class PresenceDetector(Thread):
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
             )
             self._logger.log(f"API Response: {response.content!r}", is_debug=True)
-        except Exception as e:
-            self._logger.log(str(e), is_debug=True)
+        except Exception as ex:
+            self._logger.log(str(ex), is_debug=True)
             # Force full sync when HA returns
             self._full_sync_counter = 0
             return False
@@ -143,10 +143,14 @@ class PresenceDetector(Thread):
             clients.update(response["clients"])
         return clients
 
+    def _on_leave(self, client: str):
+        if self._settings.offline_after <= 1:
+            self.set_client_away(client)
+
     def start_watchers(self):
         for interface in self._settings.interfaces:
             # Start an ubus watcher for every interface
-            watcher = UbusWatcher(interface, self)
+            watcher = UbusWatcher(interface, self.set_client_home, self._on_leave)
             watcher.start()
             self._watchers.append(watcher)
 
@@ -192,9 +196,15 @@ class PresenceDetector(Thread):
 class UbusWatcher(Thread):
     """Watches live ubus events and signals presence detector of leave/join events"""
 
-    def __init__(self, interface: str, detector: PresenceDetector) -> None:
+    def __init__(
+        self,
+        interface: str,
+        on_join: Callable[[str], None],
+        on_leave: Callable[[str], None],
+    ) -> None:
         super().__init__()
-        self._detector = detector
+        self._on_join = on_join
+        self._on_leave = on_leave
         self._interface = interface
         self._killed = False
 
@@ -202,25 +212,36 @@ class UbusWatcher(Thread):
         self._killed = True
 
     def run(self) -> None:
-        ubus = subprocess.Popen(
-            ["ubus", "subscribe", self._interface], stdout=subprocess.PIPE, text=True
-        )
-        if not ubus.stdout:
-            return
-        for line in iter(ubus.stdout.readline, "{}"):
-            if self._killed:
-                ubus.kill()
-                return
-            event = {}
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                # Ignore incomplete / invalid json
-                pass
-            if "assoc" in event:
-                self._detector.set_client_home(event["assoc"]["address"])
-            elif "disassoc" in event and self._detector._settings.offline_after <= 1:
-                self._detector.set_client_away(event["disassoc"]["address"])
+        while not self._killed:
+            ubus = subprocess.Popen(
+                ["ubus", "subscribe", self._interface],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            # Give ubus time to start and/or fail
+            time.sleep(1)
+            # Check if it failed to start
+            returncode = ubus.poll()
+            if returncode is not None or ubus.stdout is None:
+                # Starting ubus failed -> interface does not exist (yet)? let's retry later
+                ubus.wait()
+                continue
+            # Startup OK, start reading stdout
+            while not self._killed:
+                line = ubus.stdout.readline()
+                event = {}
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    # Ignore incomplete / invalid json
+                    pass
+                if "assoc" in event:
+                    self._on_join(event["assoc"]["address"])
+                elif "disassoc" in event:
+                    self._on_leave(event["disassoc"]["address"])
+            ubus.terminate()
+            ubus.wait()
+
 
 def main():
     parser = argparse.ArgumentParser()
