@@ -175,9 +175,13 @@ class PresenceDetector(Thread):
         # The main (sync) polling loop
         while not self._killed:
             seen_now = self._get_all_online_clients()
+            # Periodically perform a full sync of all clients in case of connection failure
+            self.full_sync()
+            # Perform a regular 'changes only' sync with HA
             for client in seen_now:
                 self.set_client_home(client)
 
+            # Mark unseen clients as away after 'offline_after' intervals
             for client in self._clients_seen.copy():
                 if client in seen_now:
                     continue
@@ -188,7 +192,6 @@ class PresenceDetector(Thread):
                 self.set_client_away(client)
 
             time.sleep(self._settings.poll_interval)
-            self.full_sync()
 
             self._logger.log(f"Clients seen: {self._clients_seen}", is_debug=True)
 
