@@ -3,8 +3,11 @@ name: Pylint and mypy
 on:
   push:
     branches:
-      - main
-  pull_request: {}
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch: {}
 
 jobs:
   checks:
