@@ -104,7 +104,7 @@ class PresenceDetector(Thread):
         self._full_sync_counter -= 1
         if self._full_sync_counter <= 0:
             sync_ok = True
-            for client, offline_after in self._clients_seen.items():
+            for client, offline_after in self._clients_seen.copy().items():
                 if offline_after == self._settings.offline_after:
                     self._logger.log(f"full sync {client}", is_debug=True)
                     sync_ok &= self._ha_seen(client)
