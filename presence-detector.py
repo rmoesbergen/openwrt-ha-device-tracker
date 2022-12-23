@@ -274,7 +274,7 @@ def main():
         "-c",
         "--config",
         help="Filename of configuration file",
-        default="/etc/config/settings.json",
+        default="/etc/config/presence-detector.settings.json",
     )
     args = parser.parse_args()
 
