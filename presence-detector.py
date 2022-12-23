@@ -179,7 +179,7 @@ class PresenceDetector(Thread):
         """ Should this Thread be stopped? """
         return self._killed
 
-    def stop(self):
+    def stop(self, signum: int = None, frame: int = None):
         """ Stop this thread as soon as possible """
         self._logger.log("Stopping...")
         self.stop_watchers()
