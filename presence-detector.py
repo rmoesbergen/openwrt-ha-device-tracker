@@ -14,7 +14,7 @@ import time
 from threading import Thread
 from typing import Dict, Any, List, Callable
 
-import requests
+from urllib import request
 
 
 class Logger:
@@ -69,6 +69,13 @@ class PresenceDetector(Thread):
         self._watchers: List[UbusWatcher] = []
         self._killed = False
 
+    @staticmethod
+    def post(url: str, json: dict = {}, headers: dict = {}, timeout: int = None):
+        json = globals()["json"].dumps(json).encode("utf-8")
+        req = request.Request(url, data=json, headers=headers)
+        response = request.urlopen(req, timeout=timeout)
+        return type("", (), {"content": response.read(), "ok": response.code < 400})()
+        
     def _ha_seen(self, client: str, seen: bool = True) -> bool:
         """ Call the HA device tracker 'see' service to update home/away status  """
         if seen:
@@ -81,14 +88,14 @@ class PresenceDetector(Thread):
             body.update(self._settings.params[client])
 
         try:
-            response = requests.post(
+            response = self.post(
                 f"{self._settings.hass_url}/api/services/device_tracker/see",
                 json=body,
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
                 timeout=5,
             )
             self._logger.log(f"API Response: {response.content!r}", is_debug=True)
-        except (requests.RequestException, ConnectionError) as ex:
+        except Exception as ex:
             self._logger.log(str(ex), is_debug=True)
             # Force full sync when HA returns
             self._full_sync_counter = 0
