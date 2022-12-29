@@ -15,7 +15,7 @@ from threading import Thread
 from typing import Dict, Any, List, Callable
 
 from urllib import request
-
+from urllib.error import URLError, HTTPError
 
 class Logger:
     """ Class to handle logging to syslog """
@@ -70,9 +70,9 @@ class PresenceDetector(Thread):
         self._killed = False
 
     @staticmethod
-    def post(url: str, json: dict = {}, headers: dict = {}, timeout: int = None):
-        json = globals()["json"].dumps(json).encode("utf-8")
-        req = request.Request(url, data=json, headers=headers)
+    def _post(url: str, data: dict = {}, headers: dict = {}, timeout: int = None):
+        data = json.dumps(data).encode("utf-8")
+        req = request.Request(url, data=data, headers=headers)
         response = request.urlopen(req, timeout=timeout)
         return type("", (), {"content": response.read(), "ok": response.code < 400})()
         
@@ -88,14 +88,14 @@ class PresenceDetector(Thread):
             body.update(self._settings.params[client])
 
         try:
-            response = self.post(
+            response = self._post(
                 f"{self._settings.hass_url}/api/services/device_tracker/see",
-                json=body,
+                data=body,
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
                 timeout=5,
             )
             self._logger.log(f"API Response: {response.content!r}", is_debug=True)
-        except Exception as ex:
+        except (URLError, HTTPError) as ex:
             self._logger.log(str(ex), is_debug=True)
             # Force full sync when HA returns
             self._full_sync_counter = 0
