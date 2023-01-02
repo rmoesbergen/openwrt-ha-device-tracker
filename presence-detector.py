@@ -70,13 +70,15 @@ class PresenceDetector(Thread):
         self._killed = False
 
     @staticmethod
-    def _post(url: str, data: dict = None, headers: dict = None, timeout: int = None):
-        if data is None:
-            data = {}
-        if headers is None:
-            headers = {}
-        data = json.dumps(data).encode("utf-8")
-        req = request.Request(url, data=data, headers=headers)
+    def _post(url: str,
+              data: dict | None = None,
+              headers: dict | None = None,
+              timeout: int | None = None):
+        data = data or {}
+        headers = headers or {}
+        req = request.Request(url,
+                              data=json.dumps(data).encode("utf-8"),
+                              headers=headers)
         with request.urlopen(req, timeout=timeout) as response:
             return type("", (), {"content": response.read(), "ok": response.code < 400})()
 
@@ -190,7 +192,7 @@ class PresenceDetector(Thread):
         """ Should this Thread be stopped? """
         return self._killed
 
-    def stop(self, _signum: int = None, _frame: int = None):
+    def stop(self, _signum: int | None = None, _frame: int | None = None):
         """ Stop this thread as soon as possible """
         self._logger.log("Stopping...")
         self.stop_watchers()
