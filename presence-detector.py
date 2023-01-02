@@ -70,12 +70,16 @@ class PresenceDetector(Thread):
         self._killed = False
 
     @staticmethod
-    def _post(url: str, data: dict = {}, headers: dict = {}, timeout: int = None):
+    def _post(url: str, data: dict = None, headers: dict = None, timeout: int = None):
+        if data is None:
+            data = {}
+        if headers is None:
+            headers = {}
         data = json.dumps(data).encode("utf-8")
         req = request.Request(url, data=data, headers=headers)
-        response = request.urlopen(req, timeout=timeout)
-        return type("", (), {"content": response.read(), "ok": response.code < 400})()
-        
+        with request.urlopen(req, timeout=timeout) as response:
+            return type("", (), {"content": response.read(), "ok": response.code < 400})()
+
     def _ha_seen(self, client: str, seen: bool = True) -> bool:
         """ Call the HA device tracker 'see' service to update home/away status  """
         if seen:
@@ -186,7 +190,7 @@ class PresenceDetector(Thread):
         """ Should this Thread be stopped? """
         return self._killed
 
-    def stop(self, signum: int = None, frame: int = None):
+    def stop(self, _signum: int = None, _frame: int = None):
         """ Stop this thread as soon as possible """
         self._logger.log("Stopping...")
         self.stop_watchers()
