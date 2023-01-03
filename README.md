@@ -9,11 +9,11 @@ issues with Home Assistant gracefully and ensures that device state is always in
 ## Installation ##
 
 * Log in to your OpenWRT device
-* Place presence-detector.py and settings.json somewhere persistent (I use /etc/config)
+* Place presence-detector.py and presence-detector.settings.json somewhere persistent (I use /etc/config)
 * Make presence-detector.py executable: chmod +x presence-detector.py
 * Place the init-script from this repo's init.d directory into /etc/init.d on your device
 * Install python + deps: opkg update && opkg install python3-requests
-* Adjust settings.json to your needs (see below)
+* Adjust /etc/config/presence-detector.settings.json to your needs (see below)
 * run 'service presence-detector enable' to enable the service at startup
 * run 'service presence-detector start', or simply reboot
 
