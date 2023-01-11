@@ -12,7 +12,7 @@ import subprocess
 import syslog
 import time
 from threading import Thread
-from typing import Dict, Any, List, Callable
+from typing import Dict, Any, List, Callable, Optional
 
 from urllib import request
 from urllib.error import URLError, HTTPError
@@ -192,7 +192,7 @@ class PresenceDetector(Thread):
         """Should this Thread be stopped?"""
         return self._killed
 
-    def stop(self, _signum: int | None = None, _frame: int | None = None):
+    def stop(self, _signum: Optional[int] = None, _frame: Optional[int] = None):
         """Stop this thread as soon as possible"""
         self._logger.log("Stopping...")
         self.stop_watchers()
