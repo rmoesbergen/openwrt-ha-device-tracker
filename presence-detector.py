@@ -101,7 +101,7 @@ class PresenceDetector(Thread):
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
             )
             self._logger.log(f"API Response: {response.content!r}", is_debug=True)
-        except (URLError, HTTPError) as ex:
+        except (URLError, HTTPError, TimeoutError) as ex:
             self._logger.log(str(ex), is_debug=True)
             # Force full sync when HA returns
             self._full_sync_counter = 0
