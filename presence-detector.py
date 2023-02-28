@@ -140,9 +140,6 @@ class PresenceDetector(Thread):
         """Mark a client as home in HA"""
         if client in self._settings.do_not_track:
             return
-        # Add ap prefix if ap_name defined in settings
-        if self._settings.ap_name:
-            client = f"{self._settings.ap_name}_{client}"
         if client not in self._clients_seen:
             self._logger.log(f"Device {client} is now at {self._settings.location}")
             if self._ha_seen(client):
@@ -150,9 +147,9 @@ class PresenceDetector(Thread):
         else:
             self._clients_seen[client] = self._settings.offline_after
 
-    def _get_all_online_clients(self) -> Dict[str, Any]:
+    def _get_all_online_clients(self) -> List[str]:
         """Call ubus and get all online clients"""
-        clients = {}
+        clients = []
         for interface in self._settings.interfaces:
             process = subprocess.run(
                 ["ubus", "call", interface, "get_clients"],
@@ -165,8 +162,17 @@ class PresenceDetector(Thread):
                     f"Error running ubus for interface {interface}: {process.stderr}"
                 )
                 continue
-            response = json.loads(process.stdout)
-            clients.update(response["clients"])
+            response: dict = json.loads(process.stdout)
+            # Prefix the client mac with ap_name if the ap_name setting is enabled
+            if self._settings.ap_name:
+                clients.extend(
+                    [
+                        f"{self._settings.ap_name}_{client}"
+                        for client in response["clients"]
+                    ]
+                )
+            else:
+                clients.extend(response["clients"].keys())
         return clients
 
     def _on_leave(self, client: str):
