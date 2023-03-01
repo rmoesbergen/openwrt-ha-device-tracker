@@ -15,7 +15,6 @@ from threading import Thread
 from typing import Dict, Any, List, Callable, Optional
 
 from urllib import request
-from urllib.error import URLError, HTTPError
 
 
 class Logger:
@@ -101,7 +100,7 @@ class PresenceDetector(Thread):
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
             )
             self._logger.log(f"API Response: {response.content!r}", is_debug=True)
-        except (URLError, HTTPError, TimeoutError) as ex:
+        except Exception as ex:  # pylint: disable=broad-except
             self._logger.log(str(ex), is_debug=True)
             # Force full sync when HA returns
             self._full_sync_counter = 0
