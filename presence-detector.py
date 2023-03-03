@@ -287,9 +287,9 @@ class UbusWatcher(Thread):
                     # Ignore incomplete / invalid json
                     pass
                 if "assoc" in event:
-                    self._on_join(event['assoc']['address'])
+                    self._on_join(event["assoc"]["address"])
                 elif "disassoc" in event:
-                    self._on_leave(event['disassoc']['address'])
+                    self._on_leave(event["disassoc"]["address"])
             ubus.terminate()
             ubus.wait()
 
