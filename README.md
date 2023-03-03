@@ -33,7 +33,7 @@ The settings file looks like this:
       "dev_id": "phonedave"
     }
   },
-  "offline_after": 3,
+  "offline_after": 1,
   "poll_interval": 15,
   "full_sync_polls": 10,
   "ap_name": "",
@@ -50,7 +50,7 @@ Some settings will need a bit of explaining:
 * interfaces: This is an array of Wifi interface names to poll, prefixed with 'hostapd.' (it's the ubus service name).
 * do_not_track: This is an array of devices to ignore.
 * params: A dictionary containing additional parameters for specific devices. Those are sent together with MAC address and location name. Note here you could also override MAC and location name. For information on which keys you can add, see [here](https://www.home-assistant.io/integrations/device_tracker/#device_trackersee-service).
-* offline_after: Set a device as not_home after is has been absent for this many poll intervals. Set this to 1 to immediately notify HA when a device leaves the network. Default: 3
+* offline_after: Set a device as not_home after it has been absent for this many poll intervals. Set this to 1 to immediately notify HA when a device leaves the network. Set this to 1 to use the ubus leave event and immediately mark a device as away. Default: 1
 * poll_interval: Poll interval in seconds. Default: 15
 * full_sync_polls: Re-sync the device state of all devices every X poll intervals. This is to ensure device state is in sync,
   even after HA restarts, connectivity loss, or missed events. Default: 10
