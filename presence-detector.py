@@ -46,7 +46,7 @@ class Settings:
             "interfaces": ["hostapd.wlan0"],
             "do_not_track": [],
             "params": {},
-            "offline_after": 3,
+            "offline_after": 1,
             "poll_interval": 15,
             "full_sync_polls": 10,
             "location": "home",
@@ -174,16 +174,24 @@ class PresenceDetector(Thread):
                 clients.extend(response["clients"].keys())
         return clients
 
+    def _on_join(self, client: str):
+        """Callback for the Ubus watcher thread when a client joins"""
+        if self._settings.ap_name:
+            client = f"{self._settings.ap_name}_{client}"
+        self.set_client_home(client)
+
     def _on_leave(self, client: str):
         """Callback for the Ubus watcher thread when a client leaves"""
         if self._settings.offline_after <= 1:
+            if self._settings.ap_name:
+                client = f"{self._settings.ap_name}_{client}"
             self.set_client_away(client)
 
     def start_watchers(self):
         """Start ubus watcher threads for every interface"""
         for interface in self._settings.interfaces:
             # Start an ubus watcher for every interface
-            watcher = UbusWatcher(interface, self.set_client_home, self._on_leave)
+            watcher = UbusWatcher(interface, self._on_join, self._on_leave)
             watcher.start()
             self._watchers.append(watcher)
 
@@ -217,15 +225,16 @@ class PresenceDetector(Thread):
             for client in seen_now:
                 self.set_client_home(client)
 
-            # Mark unseen clients as away after 'offline_after' intervals
-            for client in self._clients_seen.copy():
-                if client in seen_now:
-                    continue
-                self._clients_seen[client] -= 1
-                if self._clients_seen[client] > 0:
-                    continue
-                # Client has not been seen x times, mark as away
-                self.set_client_away(client)
+            # Mark unseen clients as away after 'offline_after' intervals if polling is enabled
+            if self._settings.offline_after > 1:
+                for client in self._clients_seen.copy():
+                    if client in seen_now:
+                        continue
+                    self._clients_seen[client] -= 1
+                    if self._clients_seen[client] > 0:
+                        continue
+                    # Client has not been seen x times, mark as away
+                    self.set_client_away(client)
 
             time.sleep(self._settings.poll_interval)
 
