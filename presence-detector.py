@@ -129,8 +129,7 @@ class PresenceDetector(Thread):
         self._logger.log(f"Device {client} is now away")
         if self._ha_seen(client, False):
             # Away call to HA was successful -> remove from list
-            if client in self._clients_seen:
-                del self._clients_seen[client]
+            self._clients_seen.pop(client, None)
         else:
             # Call failed -> retry next time
             self._clients_seen[client] = 1
@@ -225,8 +224,9 @@ class PresenceDetector(Thread):
             for client in seen_now:
                 self.set_client_home(client)
 
-            # Mark unseen clients as away after 'offline_after' intervals if polling is enabled
-            if self._settings.offline_after > 1:
+            # Mark unseen clients as away after 'offline_after' intervals if polling is enabled,
+            # or when a full sync is needed
+            if self._settings.offline_after > 1 or self._full_sync_counter == 0:
                 for client in self._clients_seen.copy():
                     if client in seen_now:
                         continue
