@@ -11,9 +11,11 @@ import signal
 import subprocess
 import syslog
 import time
+from dataclasses import dataclass
+from enum import IntEnum
+from queue import Queue
 from threading import Thread
-from typing import Dict, Any, List, Callable, Optional
-
+from typing import Any, List, Callable, Optional, Tuple
 from urllib import request
 
 
@@ -44,11 +46,9 @@ class Settings:
         self._settings = {
             "hass_url": "http://homeassistant.local:8123",
             "interfaces": ["hostapd.wlan0"],
-            "do_not_track": [],
+            "filter_is_denylist": True,
+            "filter": [],
             "params": {},
-            "offline_after": 1,
-            "poll_interval": 15,
-            "full_sync_polls": 10,
             "location": "home",
             "away": "not_home",
             "debug": False,
@@ -60,6 +60,21 @@ class Settings:
         return self._settings.get(item)
 
 
+@dataclass
+class QueueItem:
+    """Represents a device item on the queue"""
+
+    class Action(IntEnum):
+        """Possible queue item actions"""
+
+        ADD = 1
+        DELETE = 2
+        QUIT = 3
+
+    device: str
+    action: Action
+
+
 class PresenceDetector(Thread):
     """Presence detector that uses ubus polling to detect online devices"""
 
@@ -67,87 +82,63 @@ class PresenceDetector(Thread):
         super().__init__()
         self._settings = Settings(config_file)
         self._logger = Logger(self._settings.debug)
-        self._full_sync_counter = self._settings.full_sync_polls
-        self._clients_seen: Dict[str, int] = {}
+        self._queue: Queue = Queue()
         self._watchers: List[UbusWatcher] = []
         self._killed = False
 
     @staticmethod
-    def _post(url: str, data: dict, headers: dict):
+    def _post(url: str, data: dict, headers: dict) -> Tuple[str, bool]:
         req = request.Request(
             url, data=json.dumps(data).encode("utf-8"), headers=headers
         )
         with request.urlopen(req, timeout=5) as response:
-            return type(
-                "", (), {"content": response.read(), "ok": response.code < 400}
-            )()
+            return response.read(), response.code < 400
 
-    def _ha_seen(self, client: str, seen: bool = True) -> bool:
+    def _ha_seen(self, device: str, seen: bool = True) -> bool:
         """Call the HA device tracker 'see' service to update home/away status"""
         if seen:
             location = self._settings.location
         else:
             location = self._settings.away
 
-        body = {"mac": client, "location_name": location, "source_type": "router"}
-        if client in self._settings.params:
-            body.update(self._settings.params[client])
+        body = {"mac": device, "location_name": location, "source_type": "router"}
+        if device in self._settings.params:
+            body.update(self._settings.params[device])
+        if self._settings.ap_name:
+            body["mac"] = f"{self._settings.ap_name}_{device}"
+
+        self._logger.log(f"Posting to HA: {body}", True)
 
         try:
-            response = self._post(
+            response, ok = self._post(
                 f"{self._settings.hass_url}/api/services/device_tracker/see",
                 data=body,
                 headers={"Authorization": f"Bearer {self._settings.hass_token}"},
             )
-            self._logger.log(f"API Response: {response.content!r}", is_debug=True)
+            self._logger.log(f"API Response: {response!r}", is_debug=True)
         except Exception as ex:  # pylint: disable=broad-except
             self._logger.log(str(ex), is_debug=True)
-            # Force full sync when HA returns
-            self._full_sync_counter = 0
             return False
 
-        if not response.ok:
-            self._full_sync_counter = 0
+        return ok
 
-        return response.ok
-
-    def full_sync(self) -> None:
-        """Syncs the state of all devices once every X polls"""
-        self._full_sync_counter -= 1
-        if self._full_sync_counter <= 0:
-            sync_ok = True
-            for client, offline_after in self._clients_seen.copy().items():
-                if offline_after == self._settings.offline_after:
-                    self._logger.log(f"full sync {client}", is_debug=True)
-                    sync_ok &= self._ha_seen(client)
-            # Reset timer only when all syncs were successful
-            if sync_ok:
-                self._full_sync_counter = self._settings.full_sync_polls
-
-    def set_client_away(self, client: str) -> None:
+    def set_device_away(self, device: str) -> None:
         """Mark a client as away in HA"""
-        self._logger.log(f"Device {client} is now away")
-        if self._ha_seen(client, False):
-            # Away call to HA was successful -> remove from list
-            self._clients_seen.pop(client, None)
-        else:
-            # Call failed -> retry next time
-            self._clients_seen[client] = 1
-
-    def set_client_home(self, client: str):
-        """Mark a client as home in HA"""
-        if client in self._settings.do_not_track:
+        if not self._should_handle_device(device):
             return
-        if client not in self._clients_seen:
-            self._logger.log(f"Device {client} is now at {self._settings.location}")
-            if self._ha_seen(client):
-                self._clients_seen[client] = self._settings.offline_after
-        else:
-            self._clients_seen[client] = self._settings.offline_after
+        self._queue.put(QueueItem(device, QueueItem.Action.DELETE))
+        self._logger.log(f"Device {device} is now away")
 
-    def _get_all_online_clients(self) -> List[str]:
-        """Call ubus and get all online clients"""
-        clients = []
+    def set_device_home(self, device: str) -> None:
+        """Add client to the 'add' queue"""
+        if not self._should_handle_device(device):
+            return
+        self._queue.put(QueueItem(device, QueueItem.Action.ADD))
+        self._logger.log(f"Device {device} is now at {self._settings.location}")
+
+    def _get_all_online_devices(self) -> List[str]:
+        """Call ubus and get all online devices"""
+        devices = []
         for interface in self._settings.interfaces:
             process = subprocess.run(
                 ["ubus", "call", interface, "get_clients"],
@@ -161,40 +152,24 @@ class PresenceDetector(Thread):
                 )
                 continue
             response: dict = json.loads(process.stdout)
-            # Prefix the client mac with ap_name if the ap_name setting is enabled
-            if self._settings.ap_name:
-                clients.extend(
-                    [
-                        f"{self._settings.ap_name}_{client}"
-                        for client in response["clients"]
-                    ]
-                )
-            else:
-                clients.extend(response["clients"].keys())
-        return clients
+            devices.extend(response["clients"].keys())
+        return devices
 
-    def _on_join(self, client: str):
-        """Callback for the Ubus watcher thread when a client joins"""
-        if self._settings.ap_name:
-            client = f"{self._settings.ap_name}_{client}"
-        self.set_client_home(client)
+    def _should_handle_device(self, device: str) -> bool:
+        """ Check if a device should be handled by checking the allow/deny list"""
+        if device in self._settings.filter:
+            return not self._settings.filter_is_denylist
+        return self._settings.filter_is_denylist
 
-    def _on_leave(self, client: str):
-        """Callback for the Ubus watcher thread when a client leaves"""
-        if self._settings.offline_after <= 1:
-            if self._settings.ap_name:
-                client = f"{self._settings.ap_name}_{client}"
-            self.set_client_away(client)
-
-    def start_watchers(self):
+    def start_watchers(self) -> None:
         """Start ubus watcher threads for every interface"""
         for interface in self._settings.interfaces:
             # Start an ubus watcher for every interface
-            watcher = UbusWatcher(interface, self._on_join, self._on_leave)
+            watcher = UbusWatcher(interface, self.set_device_home, self.set_device_away)
             watcher.start()
             self._watchers.append(watcher)
 
-    def stop_watchers(self):
+    def stop_watchers(self) -> None:
         """Signal all ubus watchers to stop"""
         for watcher in self._watchers:
             watcher.stop()
@@ -209,36 +184,45 @@ class PresenceDetector(Thread):
         self._logger.log("Stopping...")
         self.stop_watchers()
         self._killed = True
+        self._queue.put(QueueItem("quit", QueueItem.Action.QUIT))
+
+    def _do_initial_sync(self):
+        """Perform a sync of all currently online devices"""
+        seen_now = self._get_all_online_devices()
+        for client in seen_now:
+            self.set_device_home(client)
 
     def run(self) -> None:
         """Main loop for the presence detector"""
+        self._do_initial_sync()
+
         # Start ubus watcher(s) for every interface
         self.start_watchers()
 
+        ha_is_offline = False
+
         # The main (sync) polling loop
         while not self._killed:
-            seen_now = self._get_all_online_clients()
-            # Periodically perform a full sync of all clients in case of connection failure
-            self.full_sync()
-            # Perform a regular 'changes only' sync with HA
-            for client in seen_now:
-                self.set_client_home(client)
+            item: QueueItem = self._queue.get()
 
-            # Mark unseen clients as away after 'offline_after' intervals if polling is enabled,
-            # or when a full sync is needed
-            if self._settings.offline_after > 1 or self._full_sync_counter == 0:
-                for client in self._clients_seen.copy():
-                    if client in seen_now:
-                        continue
-                    self._clients_seen[client] -= 1
-                    if self._clients_seen[client] > 0:
-                        continue
-                    # Client has not been seen x times, mark as away
-                    self.set_client_away(client)
+            if item.action == QueueItem.Action.QUIT:
+                self._queue.task_done()
+                break
 
-            time.sleep(self._settings.poll_interval)
+            if self._ha_seen(item.device, item.action == QueueItem.Action.ADD):
+                if ha_is_offline:
+                    # We're back online -> process backlog
+                    ha_is_offline = False
+                    self._do_initial_sync()
+            else:
+                self._logger.log("Home Assistant seems to be offline, sleeping...")
+                # HA if offline -> Add the item back to the queue
+                # and perform a full sync when it's back
+                self._queue.put(item)
+                ha_is_offline = True
+                time.sleep(5)
 
-            self._logger.log(f"Clients seen: {self._clients_seen}", is_debug=True)
+            self._queue.task_done()
 
 
 class UbusWatcher(Thread):
