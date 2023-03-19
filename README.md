@@ -12,7 +12,7 @@ sure every event is accepted by Home Assistant before removing it from the queue
 * Place presence-detector.py and presence-detector.settings.json somewhere persistent (I use /etc/config)
 * Make presence-detector.py executable: chmod +x presence-detector.py
 * Place the init-script from this repo's init.d directory into /etc/init.d on your device
-* Install python + deps: opkg update && opkg install python3-light python3-urllib python3-idna
+* Install python + deps: opkg update && opkg install python3-light python3-urllib python3-idna. If you need to connect to Home Assistant via HTTPS, also install python3-openssl.
 * Adjust /etc/config/presence-detector.settings.json to your needs (see below)
 * run 'service presence-detector enable' to enable the service at startup
 * run 'service presence-detector start', or simply reboot
