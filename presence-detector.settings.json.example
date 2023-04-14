@@ -2,17 +2,14 @@
   "hass_url": "http://hassio.local:8123",
   "hass_token" : "<Home Assistant REST API Bearer Token>",
   "interfaces": ["hostapd.wlan0", "hostapd.wlan1"],
-  "do_not_track": ["01:23:45:67:89:ab"],
+  "filter_is_denylist": true,
+  "filter": ["01:23:45:67:89:ab"],
   "params": {
-    "01:23:45:67:89:ab": {
-      "mac": "ff:ff:ff:ff:ff:ff",
+    "00:00:00:00:00:00": {
       "hostname": "Dave",
       "dev_id": "phonedave"
     }
   },
-  "offline_after": 3,
-  "poll_interval": 15,
-  "full_sync_polls": 10,
   "ap_name": "",
   "location": "home",
   "away": "not_home",

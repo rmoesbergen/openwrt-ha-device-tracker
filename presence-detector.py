@@ -56,6 +56,14 @@ class Settings:
         with open(config_file, "r", encoding="utf-8") as settings:
             self._settings.update(json.load(settings))
 
+        # Lowercase all MAC addresses in the filter and params settings
+        self._settings["filter"] = [
+            device.lower() for device in self.filter
+        ]
+        self._settings["params"] = {
+            device.lower(): params for device, params in self.params.items()
+        }
+
     def __getattr__(self, item: str) -> Any:
         return self._settings.get(item)
 
@@ -156,7 +164,7 @@ class PresenceDetector(Thread):
         return devices
 
     def _should_handle_device(self, device: str) -> bool:
-        """ Check if a device should be handled by checking the allow/deny list"""
+        """Check if a device should be handled by checking the allow/deny list"""
         if device in self._settings.filter:
             return not self._settings.filter_is_denylist
         return self._settings.filter_is_denylist
@@ -271,9 +279,9 @@ class UbusWatcher(Thread):
                     # Ignore incomplete / invalid json
                     pass
                 if "assoc" in event:
-                    self._on_join(event["assoc"]["address"])
+                    self._on_join(event["assoc"]["address"].lower())
                 elif "disassoc" in event:
-                    self._on_leave(event["disassoc"]["address"])
+                    self._on_leave(event["disassoc"]["address"].lower())
             ubus.terminate()
             ubus.wait()
 
