@@ -69,7 +69,7 @@ dave:
 You can select the icon this entity will use by entering an MDI code for the icon ie `icon: mdi:cellphone-basic`. Updating the icon or other seetings manually requires a restart of HA.
 
 This will create an entity that looks like:
-[Entity](entity.png)
+![Entity](entity.png)
 
 Testing indicates that HA only cares about the device MAC address for updating the entity state. This means you can omit the params in presence-detector.settings.json entirely and freely edit known_devices.yaml to give the entity any name you like as long as you keep the MAC address the same. This also means you can add new devices to known_devices.yaml directly without them being present on your network if you know the MAC address.
 
