@@ -66,7 +66,7 @@ dave:
   picture:
   track: true
 ```
-You can select the icon this entity will use by entering an MDI code for the icon ie `icon: mdi:cellphone-basic`. Updating the icon or other seetings manually requires a restart of HA.
+You can select the icon this entity will use by entering an MDI code for the icon, ie `icon: mdi:cellphone-basic`. Updating the icon or other settings manually requires a restart of HA.
 
 This will create an entity that looks like:
 ![Entity](entity.png)
