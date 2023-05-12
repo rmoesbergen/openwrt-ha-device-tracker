@@ -6,7 +6,7 @@
   "filter": ["01:23:45:67:89:ab"],
   "params": {
     "00:00:00:00:00:00": {
-      "hostname": "Dave",
+      "host_name": "Dave",
       "dev_id": "phonedave"
     }
   },
