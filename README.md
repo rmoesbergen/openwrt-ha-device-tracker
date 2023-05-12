@@ -55,7 +55,7 @@ Some settings will need a bit of explaining:
 * debug: Enable or disable debugging (prints state information on stdout when enabled). Default: false
 
 ## Home Assistant ##
-Correct as at HA version: 2023.5.2
+Correct as  of HA version: 2023.5.2
 
 As mentioned, this script calls the device_tracker.see service in HA. This will create an entry in the known_devices.yaml file. Entries in this file create entities inside HA which you can use for automations. Using the example params shown above the known_devices.yaml entry will be:
 ```
