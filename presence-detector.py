@@ -7,6 +7,7 @@ A Wi-Fi device presence detector for Home Assistant that runs on OpenWRT
 
 import argparse
 import json
+import queue
 import signal
 import subprocess
 import syslog
@@ -51,15 +52,14 @@ class Settings:
             "params": {},
             "location": "home",
             "away": "not_home",
+            "fallback_sync_interval": 0,
             "debug": False,
         }
         with open(config_file, "r", encoding="utf-8") as settings:
             self._settings.update(json.load(settings))
 
         # Lowercase all MAC addresses in the filter and params settings
-        self._settings["filter"] = [
-            device.lower() for device in self.filter
-        ]
+        self._settings["filter"] = [device.lower() for device in self.filter]
         self._settings["params"] = {
             device.lower(): params for device, params in self.params.items()
         }
@@ -93,6 +93,7 @@ class PresenceDetector(Thread):
         self._queue: Queue = Queue()
         self._watchers: List[UbusWatcher] = []
         self._killed = False
+        self._last_seen_clients: set[str] = set([])
 
     @staticmethod
     def _post(url: str, data: dict, headers: dict) -> Tuple[str, bool]:
@@ -194,24 +195,40 @@ class PresenceDetector(Thread):
         self._killed = True
         self._queue.put(QueueItem("quit", QueueItem.Action.QUIT))
 
-    def _do_initial_sync(self):
-        """Perform a sync of all currently online devices"""
-        seen_now = self._get_all_online_devices()
-        for client in seen_now:
-            self.set_device_home(client)
+    def _do_full_sync(self, away_only=False):
+        """Perform a full sync of all currently online devices compared to last time"""
+        seen_now = set(self._get_all_online_devices())
+        away = self._last_seen_clients - seen_now
+        self._last_seen_clients = seen_now
+        if not away_only:
+            for client in seen_now:
+                self.set_device_home(client)
+        for client in away:
+            self.set_device_away(client)
 
     def run(self) -> None:
         """Main loop for the presence detector"""
-        self._do_initial_sync()
+        self._do_full_sync()
 
         # Start ubus watcher(s) for every interface
         self.start_watchers()
 
         ha_is_offline = False
+        # Enable a queue timeout if fallback_sync interval is set
+        queue_timeout = (
+            self._settings.fallback_sync_interval
+            if self._settings.fallback_sync_interval > 0
+            else None
+        )
 
         # The main (sync) polling loop
         while not self._killed:
-            item: QueueItem = self._queue.get()
+            try:
+                item: QueueItem = self._queue.get(timeout=queue_timeout)
+            except queue.Empty:
+                # Perform a periodic full sync
+                self._do_full_sync(away_only=True)
+                continue
 
             if item.action == QueueItem.Action.QUIT:
                 self._queue.task_done()
@@ -221,10 +238,10 @@ class PresenceDetector(Thread):
                 if ha_is_offline:
                     # We're back online -> process backlog
                     ha_is_offline = False
-                    self._do_initial_sync()
+                    self._do_full_sync()
             else:
                 self._logger.log("Home Assistant seems to be offline, sleeping...")
-                # HA if offline -> Add the item back to the queue
+                # HA is offline -> Add the item back to the queue
                 # and perform a full sync when it's back
                 self._queue.put(item)
                 ha_is_offline = True

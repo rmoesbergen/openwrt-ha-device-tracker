@@ -13,5 +13,6 @@
   "ap_name": "",
   "location": "home",
   "away": "not_home",
+  "fallback_sync_interval": 0,
   "debug": false
 }
