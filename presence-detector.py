@@ -19,6 +19,8 @@ from threading import Thread
 from typing import Any, List, Callable, Optional, Tuple
 from urllib import request
 
+VERSION = "2.0.2"
+
 
 class Logger:
     """Class to handle logging to syslog"""
@@ -206,9 +208,25 @@ class PresenceDetector(Thread):
         for client in away:
             self.set_device_away(client)
 
+    def _update_version_entity(self):
+        """Create a script version entity in home assistant"""
+        ap_name = self._settings.ap_name if self._settings.ap_name else "openwrt_router"
+        entity_id = f"{ap_name}.presence_detector_version"
+
+        response, ok = self._post(
+            f"{self._settings.hass_url}/api/states/{entity_id}",
+            data={"state": VERSION},
+            headers={"Authorization": f"Bearer {self._settings.hass_token}"},
+        )
+        if not ok:
+            self._logger.log(f"Unable to create/update version entity in HA: {response}")
+
     def run(self) -> None:
         """Main loop for the presence detector"""
         self._do_full_sync()
+
+        # Update the version entity in HA
+        self._update_version_entity()
 
         # Start ubus watcher(s) for every interface
         self.start_watchers()
@@ -254,10 +272,10 @@ class UbusWatcher(Thread):
     """Watches live ubus events and signals presence detector of leave/join events"""
 
     def __init__(
-        self,
-        interface: str,
-        on_join: Callable[[str], None],
-        on_leave: Callable[[str], None],
+            self,
+            interface: str,
+            on_join: Callable[[str], None],
+            on_leave: Callable[[str], None],
     ) -> None:
         super().__init__()
         self._on_join = on_join
