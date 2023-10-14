@@ -19,7 +19,7 @@ from threading import Thread
 from typing import Any, List, Callable, Optional, Tuple
 from urllib import request
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 
 class Logger:
@@ -210,7 +210,7 @@ class PresenceDetector(Thread):
 
     def _update_version_entity(self):
         """Create a script version entity in home assistant"""
-        ap_name = self._settings.ap_name if self._settings.ap_name else "openwrt_router"
+        ap_name = self._settings.ap_name.replace("-", "_").lower() if self._settings.ap_name else "openwrt_router"
         entity_id = f"{ap_name}.presence_detector_version"
 
         response, ok = self._post(
