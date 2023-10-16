@@ -210,7 +210,11 @@ class PresenceDetector(Thread):
 
     def _update_version_entity(self):
         """Create a script version entity in home assistant"""
-        ap_name = self._settings.ap_name if self._settings.ap_name else "openwrt_router"
+        ap_name = (
+            self._settings.ap_name.replace("-", "_").lower()
+            if self._settings.ap_name
+            else "openwrt_router"
+        )
         entity_id = f"{ap_name}.presence_detector_version"
 
         response, ok = self._post(
@@ -219,7 +223,9 @@ class PresenceDetector(Thread):
             headers={"Authorization": f"Bearer {self._settings.hass_token}"},
         )
         if not ok:
-            self._logger.log(f"Unable to create/update version entity in HA: {response}")
+            self._logger.log(
+                f"Unable to create/update version entity in HA: {response}"
+            )
 
     def run(self) -> None:
         """Main loop for the presence detector"""
@@ -272,10 +278,10 @@ class UbusWatcher(Thread):
     """Watches live ubus events and signals presence detector of leave/join events"""
 
     def __init__(
-            self,
-            interface: str,
-            on_join: Callable[[str], None],
-            on_leave: Callable[[str], None],
+        self,
+        interface: str,
+        on_join: Callable[[str], None],
+        on_leave: Callable[[str], None],
     ) -> None:
         super().__init__()
         self._on_join = on_join
