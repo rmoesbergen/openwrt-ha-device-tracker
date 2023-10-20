@@ -41,6 +41,13 @@ It does this by adding all events to a queue and making sure every event is acce
 device_tracker:
 ```
 
+### The version entity
+To verify that the communication between Home Assistant and the presence detector is OK and at the latest version, the presence detector registers a 'presence_detector_version' entity with the current version number of the script in Home Assistant. You can view it as follows:
+* Log in to Home Assistant
+* Navigate to Settings -> Devices & Services -> Entities
+* Search for 'presence_detector_version'.
+If all is well, you should see a version entity for each router you installed it on, with the current version number as its value.
+
 ## OpenWRT device configuration
 The settings file on your OpenWRT device looks like this:
 
