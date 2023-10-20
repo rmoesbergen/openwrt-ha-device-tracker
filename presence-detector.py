@@ -251,7 +251,7 @@ class PresenceDetector(Thread):
                 item: QueueItem = self._queue.get(timeout=queue_timeout)
             except queue.Empty:
                 # Perform a periodic full sync
-                self._do_full_sync(away_only=True)
+                self._do_full_sync()
                 continue
 
             if item.action == QueueItem.Action.QUIT:
