@@ -19,7 +19,7 @@ from threading import Thread
 from typing import Any, List, Callable, Optional, Tuple
 from urllib import request
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 
 
 class Logger:
@@ -215,7 +215,7 @@ class PresenceDetector(Thread):
             if self._settings.ap_name
             else "openwrt_router"
         )
-        entity_id = f"{ap_name}.presence_detector_version"
+        entity_id = f"sensor.{ap_name}_presence_detector_version"
 
         response, ok = self._post(
             f"{self._settings.hass_url}/api/states/{entity_id}",
@@ -263,6 +263,8 @@ class PresenceDetector(Thread):
                     # We're back online -> process backlog
                     ha_is_offline = False
                     self._do_full_sync()
+                    # Update the version entity in HA
+                    self._update_version_entity()
             else:
                 self._logger.log("Home Assistant seems to be offline, sleeping...")
                 # HA is offline -> Add the item back to the queue
