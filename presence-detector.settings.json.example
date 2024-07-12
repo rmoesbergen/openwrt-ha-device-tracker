@@ -14,5 +14,6 @@
   "location": "home",
   "away": "not_home",
   "fallback_sync_interval": 0,
+  "source_type": "router",
   "debug": false
 }

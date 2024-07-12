@@ -55,6 +55,7 @@ class Settings:
             "location": "home",
             "away": "not_home",
             "fallback_sync_interval": 0,
+            "source_type": "router",
             "debug": False,
         }
         with open(config_file, "r", encoding="utf-8") as settings:
@@ -112,7 +113,7 @@ class PresenceDetector(Thread):
         else:
             location = self._settings.away
 
-        body = {"mac": device, "location_name": location, "source_type": "router"}
+        body = {"mac": device, "location_name": location, "source_type": self._settings.source_type}
         if device in self._settings.params:
             body.update(self._settings.params[device])
         if self._settings.ap_name:
