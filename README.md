@@ -54,7 +54,7 @@ The settings file on your OpenWRT device looks like this:
 ```json
 {
   "hass_url": "http://hassio.local:8123",
-  "hass_token" : "<Home Assistant REST API Bearer Token>",
+  "hass_token": "<Home Assistant REST API Bearer Token>",
   "interfaces": ["hostapd.wlan0", "hostapd.wlan1"],
   "filter_is_denylist": true,
   "filter": ["01:23:45:67:89:ab"],
