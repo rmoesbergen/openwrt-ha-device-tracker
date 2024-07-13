@@ -87,6 +87,7 @@ For info on how these params appear in HA see [below](#home-assistant-configurat
 * away: Custom location name to be sent when a device is no longer connected. Default: "not_home"
 * fallback_sync_interval: Interval in seconds to perform a full sync of online/offline devices to HA. Enable this as a fallback option if you have issues with devices not being detected as 'offline' when they go out of WiFi range.
 **NOTE**: this will perform a 'ubus get clients' call every X seconds, which could increase load on the router. Default 0 (disabled)
+* source_type: This is the type of device that gets sent to HA to represent the tracking device. It defaults to 'router', but can also be set to 'gps' to allow for different zones/locations to work.
 * debug: Enable or disable debugging (prints state information on stdout when enabled). Default: false
 
 ## (Optional) Home Assistant Configuration
