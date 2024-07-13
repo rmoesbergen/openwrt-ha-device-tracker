@@ -141,6 +141,8 @@ class PresenceDetector(Thread):
         """Mark a client as away in HA"""
         if not self._should_handle_device(device):
             return
+        if device in self._online_clients[interface]:
+            self._online_clients[interface].remove(device)
         for intf in set(self._settings.interfaces) - {interface}:
             if device in self._online_clients[intf]:
                 # Device is still connected to another interface -> ignore
@@ -150,8 +152,6 @@ class PresenceDetector(Thread):
                 )
                 return
         self._queue.put(QueueItem(device, interface, QueueItem.Action.DELETE))
-        if device in self._online_clients[interface]:
-            self._online_clients[interface].remove(device)
         self._logger.log(f"Device {device} on {interface} is now away")
 
     def set_device_home(self, interface: str, device: str) -> None:
