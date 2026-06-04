@@ -34,6 +34,11 @@ It does this by adding all events to a queue and making sure every event is acce
 * run 'service presence-detector start', or simply reboot
 
 ### Steps to perform in Home Assistant
+* Enable the [device_tracker](https://www.home-assistant.io/integrations/device_tracker/) integration in Home Assistant, by adding the following to your HA configuration.yaml:
+```yaml
+# Enable device_tracker
+device_tracker:
+```
 * Install the Mosquitto MQTT broker in Home Assistant or install one yourself. If you run HassOS, this can be done by installing the 'Mosquitto' add-on.
 * Install the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) in Home Assistant.
 
