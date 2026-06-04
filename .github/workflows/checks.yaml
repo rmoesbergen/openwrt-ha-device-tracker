@@ -1,4 +1,4 @@
-name: Pylint and mypy
+name: Pylint black and mypy
 
 on:
   push:
