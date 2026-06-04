@@ -120,7 +120,13 @@ class PresenceDetector(Thread):
 
     def _publish(self, topic: str, data: str) -> bool:
         self._logger.log(f"Publishing to {topic}: {data}", True)
-        return self._mqtt.publish(topic, data).is_published()
+        result = self._mqtt.publish(topic, data)
+        try:
+            result.wait_for_publish(timeout=5)
+        except RuntimeError as ex:
+            self._logger.log(f"Error publishing to {topic}: {ex}", False)
+            return False
+        return True
 
     def _ha_seen(self, device: str, seen: bool = True) -> bool:
         """Call the HA device tracker 'see' service to update home/away status"""
@@ -143,6 +149,7 @@ class PresenceDetector(Thread):
             }
             if device in self._settings.params:
                 body.update(self._settings.params[device])
+            body["device"]["name"] = body["name"]
             # Register the device in HA
             ok |= self._publish(
                 f"homeassistant/device_tracker/{device_slug}/config", json.dumps(body)
