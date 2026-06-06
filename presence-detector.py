@@ -116,10 +116,13 @@ class PresenceDetector(Thread):
         self._mqtt.connect(
             self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60
         )
+        self._mqtt.reconnect_delay_set(min_delay=1, max_delay=60)
         self._mqtt.loop_start()
 
     def _publish(self, topic: str, data: str) -> bool:
         self._logger.log(f"Publishing to {topic}: {data}", True)
+        if not self._mqtt.is_connected():
+            return False
         result = self._mqtt.publish(topic, data)
         try:
             result.wait_for_publish(timeout=5)
@@ -240,6 +243,7 @@ class PresenceDetector(Thread):
 
     def _do_full_sync(self, away_only=False):
         """Perform a full sync of all current online devices compared to last time"""
+        self._registered_clients = set()
         seen_now = set(self._get_all_online_devices())
         away = self._last_seen_clients - seen_now
         self._last_seen_clients = seen_now
