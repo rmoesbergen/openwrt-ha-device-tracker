@@ -29,7 +29,7 @@ It does this by adding all events to a queue and making sure every event is acce
 * Make presence-detector.py executable: chmod +x presence-detector.py
 * Place the init-script from this repo's init.d directory into /etc/init.d on your device
 * Make the init-script executable: chmod +x /etc/init.d/presence-detector
-* Install python + deps: opkg update && opkg install python3-light python3-paho-mqtt.
+* Install python + deps: apk update && apk add python3-light python3-paho-mqtt.
 * Adjust /etc/config/presence-detector.settings.json to your needs (see below)
 * run 'service presence-detector enable' to enable the service at startup
 * run 'service presence-detector start', or simply reboot
