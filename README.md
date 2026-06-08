@@ -147,7 +147,7 @@ Version 2 used the 'see' service API to update device state, which is not deprec
    ```bash
    apk update && apk add python3-paho-mqtt
    ```
-   (You can optionally remove the old dependency: `apk remove python3-requests`)
+   (You can optionally remove the old dependency: `apk del python3-requests`)
 
 2. **Update your configuration**: Edit `presence-detector.settings.json`.
    * Remove `hass_url` and `hass_token`.
