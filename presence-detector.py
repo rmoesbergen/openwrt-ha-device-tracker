@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# pylint: disable=too-few-public-methods,invalid-name
+# pylint: disable=too-few-public-methods,invalid-name,too-many-instance-attributes
 
 """
 A Wi-Fi device presence detector for Home Assistant that runs on OpenWRT
@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from enum import IntEnum
 from queue import Queue
 from threading import Thread
-from typing import Any, List, Callable, Optional, Tuple
-from urllib import request
+from typing import Any, Callable
 
-VERSION = "2.2.0"
+from paho.mqtt import client as mqtt
+
+VERSION = "3.0.0"
 
 
 class Logger:
@@ -47,7 +48,10 @@ class Settings:
 
     def __init__(self, config_file: str) -> None:
         self._settings = {
-            "hass_url": "http://homeassistant.local:8123",
+            "mqtt_host": "192.168.1.50",
+            "mqtt_port": 1883,
+            "mqtt_user": "ha",
+            "mqtt_password": "",
             "interfaces": ["hostapd.wlan0"],
             "filter_is_denylist": True,
             "filter": [],
@@ -94,48 +98,69 @@ class PresenceDetector(Thread):
         super().__init__()
         self._settings = Settings(config_file)
         self._logger = Logger(self._settings.debug)
+        self._connect_to_mqtt()
         self._queue: Queue = Queue()
-        self._watchers: List[UbusWatcher] = []
+        self._watchers: list[UbusWatcher] = []
         self._killed = False
         self._last_seen_clients: set[tuple[str, str]] = set()
         self._online_clients: dict[str, set[str]] = {}
+        self._registered_clients: set[str] = set()
         for interface in self._settings.interfaces:
             self._online_clients[interface] = set()
 
-    @staticmethod
-    def _post(url: str, data: dict, headers: dict) -> Tuple[str, bool]:
-        req = request.Request(
-            url, data=json.dumps(data).encode("utf-8"), headers=headers
+    def _connect_to_mqtt(self):
+        self._mqtt = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        self._mqtt.username_pw_set(
+            self._settings.mqtt_user, self._settings.mqtt_password
         )
-        with request.urlopen(req, timeout=5) as response:
-            return response.read(), response.code < 400
+        self._mqtt.connect(
+            self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60
+        )
+        self._mqtt.reconnect_delay_set(min_delay=1, max_delay=60)
+        self._mqtt.loop_start()
+
+    def _publish(self, topic: str, data: str) -> bool:
+        self._logger.log(f"Publishing to {topic}: {data}", True)
+        if not self._mqtt.is_connected():
+            return False
+        result = self._mqtt.publish(topic, data, qos=1)
+        try:
+            result.wait_for_publish(timeout=5)
+        except RuntimeError as ex:
+            self._logger.log(f"Error publishing to {topic}: {ex}", False)
+            return False
+        return True
 
     def _ha_seen(self, device: str, seen: bool = True) -> bool:
         """Call the HA device tracker 'see' service to update home/away status"""
-        if seen:
-            location = self._settings.location
-        else:
-            location = self._settings.away
-
-        body = {"mac": device, "location_name": location, "source_type": self._settings.source_type}
-        if device in self._settings.params:
-            body.update(self._settings.params[device])
+        location = self._settings.location if seen else self._settings.away
+        device_slug = device.replace(":", "_")
         if self._settings.ap_name:
-            body["mac"] = f"{self._settings.ap_name}_{device}"
+            device_slug = f"{self._settings.ap_name}_{device_slug}"
 
-        self._logger.log(f"Posting to HA: {body}", True)
-
-        try:
-            response, ok = self._post(
-                f"{self._settings.hass_url}/api/services/device_tracker/see",
-                data=body,
-                headers={"Authorization": f"Bearer {self._settings.hass_token}"},
+        ok = False
+        if device_slug not in self._registered_clients:
+            self._registered_clients.add(device_slug)
+            body = {
+                "state_topic": f"homeassistant/device_tracker/{device_slug}/state",
+                "name": device_slug,
+                "payload_home": self._settings.location,
+                "payload_not_home": self._settings.away,
+                "source_type": self._settings.source_type,
+                "device": {"connections": [["mac", device]]},
+                "unique_id": device_slug,
+            }
+            if device in self._settings.params:
+                body.update(self._settings.params[device])
+            body["device"]["name"] = body["name"]
+            # Register the device in HA
+            ok |= self._publish(
+                f"homeassistant/device_tracker/{device_slug}/config", json.dumps(body)
             )
-            self._logger.log(f"API Response: {response!r}", is_debug=True)
-        except Exception as ex:  # pylint: disable=broad-except
-            self._logger.log(str(ex), is_debug=True)
-            return False
-
+        # Set the location
+        ok |= self._publish(
+            f"homeassistant/device_tracker/{device_slug}/state", location
+        )
         return ok
 
     def set_device_away(self, interface: str, device: str) -> None:
@@ -165,7 +190,7 @@ class PresenceDetector(Thread):
             f"Device {device} on {interface} is now at {self._settings.location}"
         )
 
-    def _get_all_online_devices(self) -> List[Tuple[str, str]]:
+    def _get_all_online_devices(self) -> list[tuple[str, str]]:
         """Call ubus and get all online devices"""
         devices = []
         for interface in self._settings.interfaces:
@@ -208,15 +233,16 @@ class PresenceDetector(Thread):
         """Should this Thread be stopped?"""
         return self._killed
 
-    def stop(self, _signum: Optional[int] = None, _frame: Optional[int] = None):
+    def stop(self, _signum: int | None = None, _frame: int | None = None):
         """Stop this thread as soon as possible"""
         self._logger.log("Stopping...")
         self.stop_watchers()
         self._killed = True
         self._queue.put(QueueItem("quit", "", QueueItem.Action.QUIT))
+        self._mqtt.loop_stop()
 
     def _do_full_sync(self, away_only=False):
-        """Perform a full sync of all currently online devices compared to last time"""
+        """Perform a full sync of all current online devices compared to last time"""
         seen_now = set(self._get_all_online_devices())
         away = self._last_seen_clients - seen_now
         self._last_seen_clients = seen_now
@@ -226,35 +252,9 @@ class PresenceDetector(Thread):
         for interface, client in away:
             self.set_device_away(interface, client)
 
-    def _update_version_entity(self):
-        """Create a script version entity in home assistant"""
-        ap_name = (
-            self._settings.ap_name.replace("-", "_").lower()
-            if self._settings.ap_name
-            else "openwrt_router"
-        )
-        entity_id = f"sensor.{ap_name}_presence_detector_version"
-
-        try:
-            response, ok = self._post(
-                f"{self._settings.hass_url}/api/states/{entity_id}",
-                data={"state": VERSION},
-                headers={"Authorization": f"Bearer {self._settings.hass_token}"},
-            )
-        except Exception as ex:  # pylint: disable=broad-except
-            ok = False
-            response = str(ex)
-        if not ok:
-            self._logger.log(
-                f"Unable to create/update version entity in HA: {response}"
-            )
-
     def run(self) -> None:
         """Main loop for the presence detector"""
         self._do_full_sync()
-
-        # Update the version entity in HA
-        self._update_version_entity()
 
         # Start ubus watcher(s) for every interface
         self.start_watchers()
@@ -285,8 +285,6 @@ class PresenceDetector(Thread):
                     # We're back online -> process backlog
                     ha_is_offline = False
                     self._do_full_sync()
-                    # Update the version entity in HA
-                    self._update_version_entity()
             else:
                 self._logger.log("Home Assistant seems to be offline, sleeping...")
                 # HA is offline -> Add the item back to the queue
