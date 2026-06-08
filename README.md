@@ -9,6 +9,7 @@
 * [(Optional) Home Assistant Configuration](#optional-home-assistant-configuration)
 * [An example automation](#an-example-automation)
    * [Linking multiple devices to one person](#linking-multiple-devices-to-one-person)
+* [Migrating from version 2.X to 3.X](#migrating-from-version-2x-to-3x)
 * [Troubleshooting](#troubleshooting)
 
 ## What is this?
@@ -34,13 +35,9 @@ It does this by adding all events to a queue and making sure every event is acce
 * run 'service presence-detector start', or simply reboot
 
 ### Steps to perform in Home Assistant
-* Enable the [device_tracker](https://www.home-assistant.io/integrations/device_tracker/) integration in Home Assistant, by adding the following to your HA configuration.yaml:
-```yaml
-# Enable device_tracker
-device_tracker:
-```
 * Install the Mosquitto MQTT broker in Home Assistant or install one yourself. If you run HassOS, this can be done by installing the 'Mosquitto' add-on.
 * Install the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) in Home Assistant.
+* That's it! The devices will be automatically discovered and added as entities to Home Assistant.
 
 ## OpenWRT device configuration
 The settings file on your OpenWRT device looks like this:
@@ -134,6 +131,39 @@ You can configure this as follows:
 * Under "Select the devices that belong to this person.", add the device_tracker.* devices you want to assign
 * Click "Update"
 * In your automation trigger choose "State" and use "person.<Name>" as the Entity.
+
+## Migrating from version 2.X to 3.X
+Version 3.0.0 is a major release that switches from using the Home Assistant REST API to MQTT for device tracking. This change makes the integration more robust and easier to configure for multiple access points.
+Version 2 used the 'see' service API to update device state, which is not depreciated by Home Assistant.
+
+### Breaking Changes
+* **MQTT Required**: You must have an MQTT broker (like Mosquitto) running and the MQTT integration enabled in Home Assistant.
+* **Settings Change**: The `hass_url` and `hass_token` settings have been replaced by MQTT-related settings.
+* **Dependencies**: The `python3-requests` package is no longer needed, but `python3-paho-mqtt` is now required.
+* **Configuration**: The `device_tracker:` entry in `configuration.yaml` is no longer needed as devices are now automatically discovered via MQTT.
+
+### Migration Steps
+1. **Install new dependencies** on your OpenWRT device:
+   ```bash
+   apk update && apk add python3-paho-mqtt
+   ```
+   (You can optionally remove the old dependency: `apk remove python3-requests`)
+
+2. **Update your configuration**: Edit `presence-detector.settings.json`.
+   * Remove `hass_url` and `hass_token`.
+   * Add `mqtt_host`, `mqtt_port` (usually 1883), `mqtt_username`, and `mqtt_password`.
+   * Check the [OpenWRT device configuration](#openwrt-device-configuration) section for the new format.
+
+3. **Enable MQTT in Home Assistant**: Make sure the MQTT integration is installed and configured in Home Assistant.
+
+4. **Cleanup Home Assistant configuration**: Remove the `device_tracker:` entry from your Home Assistant `configuration.yaml`.
+
+5. **Restart the service**:
+   ```bash
+   service presence-detector restart
+   ```
+
+6. **Verify**: Check the logs using `logread` to ensure the script connects to your MQTT broker successfully.
 
 ## Troubleshooting
 The program will run as a 'service' in the background and will log interesting events to syslog.
