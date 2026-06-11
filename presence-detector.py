@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from paho.mqtt import client as mqtt
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 
 
 class Logger:
