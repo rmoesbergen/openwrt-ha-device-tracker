@@ -119,11 +119,11 @@ class PresenceDetector(Thread):
         self._mqtt.reconnect_delay_set(min_delay=1, max_delay=60)
         self._mqtt.loop_start()
 
-    def _publish(self, topic: str, data: str) -> bool:
+    def _publish(self, topic: str, data: str, retain=False) -> bool:
         self._logger.log(f"Publishing to {topic}: {data}", True)
         if not self._mqtt.is_connected():
             return False
-        result = self._mqtt.publish(topic, data, qos=1)
+        result = self._mqtt.publish(topic, data, qos=1, retain=retain)
         try:
             result.wait_for_publish(timeout=5)
         except RuntimeError as ex:
@@ -138,7 +138,7 @@ class PresenceDetector(Thread):
         if self._settings.ap_name:
             device_slug = f"{self._settings.ap_name}_{device_slug}"
 
-        ok = False
+        ok = True
         if device_slug not in self._registered_clients:
             self._registered_clients.add(device_slug)
             body = {
@@ -154,12 +154,12 @@ class PresenceDetector(Thread):
                 body.update(self._settings.params[device])
             body["device"]["name"] = body["name"]
             # Register the device in HA
-            ok |= self._publish(
+            ok &= self._publish(
                 f"homeassistant/device_tracker/{device_slug}/config", json.dumps(body)
             )
         # Set the location
-        ok |= self._publish(
-            f"homeassistant/device_tracker/{device_slug}/state", location
+        ok &= self._publish(
+            f"homeassistant/device_tracker/{device_slug}/state", location, retain=True
         )
         return ok
 
