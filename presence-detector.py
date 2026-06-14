@@ -50,8 +50,9 @@ class Settings:
         self._settings = {
             "mqtt_host": "192.168.1.50",
             "mqtt_port": 1883,
-            "mqtt_user": "ha",
+            "mqtt_username": "ha",
             "mqtt_password": "",
+            "mqtt_retain_state": True,
             "interfaces": ["hostapd.wlan0"],
             "filter_is_denylist": True,
             "filter": [],
@@ -111,7 +112,7 @@ class PresenceDetector(Thread):
     def _connect_to_mqtt(self):
         self._mqtt = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self._mqtt.username_pw_set(
-            self._settings.mqtt_user, self._settings.mqtt_password
+            self._settings.mqtt_username, self._settings.mqtt_password
         )
         self._mqtt.connect(
             self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60
@@ -159,7 +160,9 @@ class PresenceDetector(Thread):
             )
         # Set the location
         ok &= self._publish(
-            f"homeassistant/device_tracker/{device_slug}/state", location, retain=True
+            f"homeassistant/device_tracker/{device_slug}/state",
+            location,
+            retain=self._settings.mqtt_retain_state,
         )
         return ok
 

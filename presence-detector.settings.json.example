@@ -1,13 +1,16 @@
 {
-  "hass_url": "http://hassio.local:8123",
-  "hass_token" : "<Home Assistant REST API Bearer Token>",
+  "mqtt_host": "hassio.local",
+  "mqtt_port": 1883,
+  "mqtt_username": "ha",
+  "mqtt_password": "<PASSWORD>",
+  "mqtt_retain_state": true,
   "interfaces": ["hostapd.wlan0", "hostapd.wlan1"],
   "filter_is_denylist": true,
   "filter": ["01:23:45:67:89:ab"],
   "params": {
-    "00:00:00:00:00:00": {
-      "host_name": "Dave",
-      "dev_id": "phonedave"
+    "XX:YY:DD:AA:TT:QQ": {
+      "name": "Dave",
+      "icon": "mdi:cellphone-basic"
     }
   },
   "ap_name": "",

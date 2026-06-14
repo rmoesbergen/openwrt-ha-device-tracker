@@ -48,6 +48,7 @@ The settings file on your OpenWRT device looks like this:
   "mqtt_port": 1883,
   "mqtt_username": "ha",
   "mqtt_password": "<PASSWORD>",
+  "mqtt_retain_state": true,
   "interfaces": ["hostapd.wlan0", "hostapd.wlan1"],
   "filter_is_denylist": true,
   "filter": ["01:23:45:67:89:ab"],
@@ -70,6 +71,7 @@ These settings will need a bit of explaining:
 * mqtt_port: The port of the MQTT broker. Defaults to 1883.
 * mqtt_username: The username to use for authentication to the MQTT broker.
 * mqtt_password: The password to use for authentication to the MQTT broker.
+* mqtt_retain_state: Whether to set the 'retain' flag on MQTT state messages. This ensures that the device state is remembered by the MQTT broker and immediately available to Home Assistant when it connects. Default: true
 * interfaces: This is an array of Wi-Fi interface names to watch, prefixed with 'hostapd.' You can get a list of interface names by running: `ubus list hostapd.*` on your OpenWRT device.
 * filter_is_denylist: Determines if the filter setting is a denylist or an allowlist
 * filter: A list (json array) of devices to monitor or ignore, depending on the `filter_is_denylist` setting.
