@@ -110,7 +110,13 @@ class PresenceDetector(Thread):
             self._online_clients[interface] = set()
 
     def _connect_to_mqtt(self):
-        self._mqtt = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            self._mqtt = mqtt.Client(
+                callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+            )
+        else:
+            # Version 1 is deprecated but still supported
+            self._mqtt = mqtt.Client()
         self._mqtt.username_pw_set(
             self._settings.mqtt_username, self._settings.mqtt_password
         )
