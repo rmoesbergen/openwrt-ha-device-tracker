@@ -20,8 +20,6 @@ from typing import Any, Callable
 
 from paho.mqtt import client as mqtt
 
-VERSION = "3.0.1"
-
 
 class Logger:
     """Class to handle logging to syslog"""
@@ -99,7 +97,6 @@ class PresenceDetector(Thread):
         super().__init__()
         self._settings = Settings(config_file)
         self._logger = Logger(self._settings.debug)
-        self._connect_to_mqtt()
         self._queue: Queue = Queue()
         self._watchers: list[UbusWatcher] = []
         self._killed = False
@@ -108,6 +105,7 @@ class PresenceDetector(Thread):
         self._registered_clients: set[str] = set()
         for interface in self._settings.interfaces:
             self._online_clients[interface] = set()
+        self._connect_to_mqtt()
 
     def _connect_to_mqtt(self):
         if hasattr(mqtt, "CallbackAPIVersion"):
@@ -124,7 +122,19 @@ class PresenceDetector(Thread):
             self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60
         )
         self._mqtt.reconnect_delay_set(min_delay=1, max_delay=60)
+        self._mqtt.subscribe("homeassistant/status")
+        self._mqtt.message_callback_add(
+            "homeassistant/status", self._on_ha_status_message
+        )
         self._mqtt.loop_start()
+
+    def _on_ha_status_message(self, _client, _userdata, message):
+        """Callback for HA status messages"""
+        if message.payload == b"offline":
+            self._logger.log("Home Assistant is offline!")
+        elif message.payload == b"online":
+            self._logger.log("Home Assistant is back online")
+            self._do_full_sync()
 
     def _publish(self, topic: str, data: str, retain=False) -> bool:
         self._logger.log(f"Publishing to {topic}: {data}", True)
@@ -258,6 +268,7 @@ class PresenceDetector(Thread):
 
     def _do_full_sync(self, away_only=False):
         """Perform a full sync of all current online devices compared to last time"""
+        self._registered_clients = set()
         seen_now = set(self._get_all_online_devices())
         away = self._last_seen_clients - seen_now
         self._last_seen_clients = seen_now
@@ -274,7 +285,7 @@ class PresenceDetector(Thread):
         # Start ubus watcher(s) for every interface
         self.start_watchers()
 
-        ha_is_offline = False
+        mq_is_offline = False
         # Enable a queue timeout if fallback_sync interval is set
         queue_timeout = (
             self._settings.fallback_sync_interval
@@ -296,16 +307,16 @@ class PresenceDetector(Thread):
                 break
 
             if self._ha_seen(item.device, item.action == QueueItem.Action.ADD):
-                if ha_is_offline:
+                if mq_is_offline:
                     # We're back online -> process backlog
-                    ha_is_offline = False
+                    mq_is_offline = False
                     self._do_full_sync()
             else:
-                self._logger.log("Home Assistant seems to be offline, sleeping...")
-                # HA is offline -> Add the item back to the queue
+                self._logger.log("MQTT broker seems to be offline, sleeping...")
+                # MQTT is offline -> Add the item back to the queue
                 # and perform a full sync when it's back
                 self._queue.put(item)
-                ha_is_offline = True
+                mq_is_offline = True
                 time.sleep(5)
 
             self._queue.task_done()
