@@ -140,7 +140,6 @@ class PresenceDetector(Thread):
 
     def _ha_seen(self, device: str, seen: bool = True) -> bool:
         """Call the HA device tracker 'see' service to update home/away status"""
-        location = self._settings.location if seen else self._settings.away
         device_slug = device.replace(":", "_")
         if self._settings.ap_name:
             device_slug = f"{self._settings.ap_name}_{device_slug}"
@@ -150,7 +149,10 @@ class PresenceDetector(Thread):
             self._registered_clients.add(device_slug)
             body = {
                 "state_topic": f"homeassistant/device_tracker/{device_slug}/state",
+                "json_attributes_topic": f"homeassistant/device_tracker/{device_slug}/state",
+                "value_template": "{{ value_json['state'] }}",
                 "name": device_slug,
+                "platform": "device_tracker",
                 "payload_home": self._settings.location,
                 "payload_not_home": self._settings.away,
                 "source_type": self._settings.source_type,
@@ -164,10 +166,14 @@ class PresenceDetector(Thread):
             ok &= self._publish(
                 f"homeassistant/device_tracker/{device_slug}/config", json.dumps(body)
             )
-        # Set the location
+        # Set the state of the device
+        state = {
+            "in_zones": [f"zone.{self._settings.location}"] if seen else [],
+            "state": self._settings.location if seen else self._settings.away,
+        }
         ok &= self._publish(
             f"homeassistant/device_tracker/{device_slug}/state",
-            location,
+            json.dumps(state),
             retain=self._settings.mqtt_retain_state,
         )
         return ok
