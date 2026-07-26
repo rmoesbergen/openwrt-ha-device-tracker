@@ -72,7 +72,7 @@ These settings will need a bit of explaining:
 * mqtt_username: The username to use for authentication to the MQTT broker.
 * mqtt_password: The password to use for authentication to the MQTT broker.
 * mqtt_retain_state: Whether to set the 'retain' flag on MQTT state messages. This ensures that the device state is remembered by the MQTT broker and immediately available to Home Assistant when it connects. Default: true
-* interfaces: A list of Wi-Fi interfaces to monitor. These must be prefixed with `hostapd.`. To find the correct interface names for your device, run `ubus list hostapd.*` in the OpenWRT terminal.
+* interfaces: A list of Wi-Fi interfaces to monitor. Leave this unset (or an empty list) to auto-detect and monitor all WiFi interfaces. 
 * filter_is_denylist: Defines how the `filter` list is used. If `true`, the listed devices are ignored (denylist). If `false`, only the listed devices are monitored (allowlist).
 * filter: A list of MAC addresses to either ignore or monitor, depending on the `filter_is_denylist` setting.
 * params: An optional dictionary containing additional parameters for specific devices (see the example above).

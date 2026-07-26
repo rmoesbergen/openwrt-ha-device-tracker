@@ -51,7 +51,7 @@ class Settings:
             "mqtt_username": "ha",
             "mqtt_password": "",
             "mqtt_retain_state": True,
-            "interfaces": ["hostapd.wlan0"],
+            "interfaces": [],
             "filter_is_denylist": True,
             "filter": [],
             "params": {},
@@ -69,9 +69,18 @@ class Settings:
         self._settings["params"] = {
             device.lower(): params for device, params in self.params.items()
         }
+        if not self._settings["interfaces"]:
+            self._settings["interfaces"] = self.list_wifi_interfaces()
 
     def __getattr__(self, item: str) -> Any:
         return self._settings.get(item)
+
+    def list_wifi_interfaces(self) -> list[str]:
+        """List all wifi interfaces"""
+        output = subprocess.run(
+            ["ubus", "list", "hostapd.*"], stdout=subprocess.PIPE, check=True
+        )
+        return output.stdout.decode("utf-8").strip().split("\n")
 
     @staticmethod
     def deep_merge(dict1: dict, dict2: dict):
@@ -258,6 +267,9 @@ class PresenceDetector(Thread):
 
     def start_watchers(self) -> None:
         """Start ubus watcher threads for every interface"""
+        self._logger.log(
+            f"Starting ubus watchers on interfaces {self._settings.interfaces}"
+        )
         for interface in self._settings.interfaces:
             # Start an ubus watcher for every interface
             watcher = UbusWatcher(interface, self.set_device_home, self.set_device_away)
