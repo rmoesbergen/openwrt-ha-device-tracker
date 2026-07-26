@@ -72,12 +72,12 @@ These settings will need a bit of explaining:
 * mqtt_username: The username to use for authentication to the MQTT broker.
 * mqtt_password: The password to use for authentication to the MQTT broker.
 * mqtt_retain_state: Whether to set the 'retain' flag on MQTT state messages. This ensures that the device state is remembered by the MQTT broker and immediately available to Home Assistant when it connects. Default: true
-* interfaces: This is an array of Wi-Fi interface names to watch, prefixed with 'hostapd.' You can get a list of interface names by running: `ubus list hostapd.*` on your OpenWRT device.
-* filter_is_denylist: Determines if the filter setting is a denylist or an allowlist
-* filter: A list (json array) of devices to monitor or ignore, depending on the `filter_is_denylist` setting.
+* interfaces: A list of Wi-Fi interfaces to monitor. These must be prefixed with `hostapd.`. To find the correct interface names for your device, run `ubus list hostapd.*` in the OpenWRT terminal.
+* filter_is_denylist: Defines how the `filter` list is used. If `true`, the listed devices are ignored (denylist). If `false`, only the listed devices are monitored (allowlist).
+* filter: A list of MAC addresses to either ignore or monitor, depending on the `filter_is_denylist` setting.
 * params: An optional dictionary containing additional parameters for specific devices (see the example above).
 If specified, these are sent to HA together with the MAC address and location name. For information on which keys you can add, see [here](https://www.home-assistant.io/integrations/device_tracker.mqtt/#device_tracker-mqtt-configuration-variables).
-For info on how these params appear in HA see [below](#home-assistant-configuration)
+For info on how these params appear in HA see [below](#optional-home-assistant-configuration)
 * ap_name: If you have only one access point, leave as "". If this runs on multiple access points, give a name here, e.g. "ap1". The mac address of every Wi-Fi device will be prefixed with this name in HA.
 * location: Custom location name to be assigned to online devices. Default: "home"
 * away: Custom location name to be sent when a device is no longer connected. Default: "not_home"
@@ -93,8 +93,8 @@ the appearance of the Wi-Fi device entities. This is all optional and not needed
 As mentioned, this script uses MQTT to register and update device state. The device entities will be automatically created, so no need manually add them to your configuration.yaml.
 If you want the devices to have a nice name or icon, you can add them to the presence-detector.settings.json file in the 'params' section.
 
-You can select the icon this entity will use by entering an [MDI](https://pictogrammers.com/library/mdi/) code for the icon, ie `icon: mdi:cellphone-basic`.
-Updating the icon or other settings manually requires a restart of presence-detector.
+You can select the icon this entity will use by entering an [MDI](https://pictogrammers.com/library/mdi/) code for the icon, such as `icon: mdi:cellphone-basic`.
+Updating the icon or other settings requires a restart of the `presence-detector` service.
 
 Adding this icon will create an entity that looks like:
 ![Entity](entity.png)
@@ -102,6 +102,10 @@ Adding this icon will create an entity that looks like:
 Testing indicates that HA only cares about the device MAC address for updating the entity state.
 This means you can omit the params in presence-detector.settings.json entirely and devices will still be created in HA.
 But they will only have the mac address as the name and identifier.
+
+If you override the "name" parameter in the params block, that name will be the device name in HA. The unique ID will still be the MAC address.
+Note that the name field appears in 2 places: at the top level and under "device". If you only specify the top-level name, the device->name will
+automatically be set to your overridden value as well.
 
 **NB** These entities will persist over reboots even if deleted, I'm assuming there's a background task that cleans them up during normal operation.
 
@@ -130,7 +134,7 @@ Only if all devices assigned to the Person are "Away", will the Person be marked
 
 You can configure this as follows:
 * Navigate to "Settings" -> "People" and click on the person you want to assign devices to
-* Under "Select the devices that belong to this person.", add the device_tracker.* devices you want to assign
+* Under "Select the devices that belong to this person.", pick the `device_tracker.*` entities you want to link to this person.
 * Click "Update"
 * In your automation trigger choose "State" and use "person.<Name>" as the Entity.
 
@@ -184,6 +188,6 @@ If the connection not OK, check your firewall settings, if the broker is running
 ```text
 Thu Jun  4 14:41:53 2026 daemon.debug presence-detector[31196]: Publishing to homeassistant/device_tracker/xx_xx_xx_xx_xx_xx/state: home
 ```
-If you see these lines then publishing to MQTT was succesful and you should see a new entity in HA under Settings -> Devices & Services -> Entities
+If you see these lines then publishing to MQTT was successful and you should see a new entity in HA under Settings -> Devices & Services -> Entities
 If not, make sure the MQTT integrations is [enabled](#steps-to-perform-on-your-openwrt-device)
 * Make sure the Wi-Fi interface names on your router still match the "interfaces" setting. New OpenWRT versions have been known to rename the default Wi-Fi interface names.
