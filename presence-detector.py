@@ -73,6 +73,21 @@ class Settings:
     def __getattr__(self, item: str) -> Any:
         return self._settings.get(item)
 
+    @staticmethod
+    def deep_merge(dict1: dict, dict2: dict):
+        """Deep merge two dictionaries"""
+        result = dict1.copy()
+        for key, value in dict2.items():
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
+                result[key] = Settings.deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
 
 @dataclass
 class QueueItem:
@@ -149,8 +164,8 @@ class PresenceDetector(Thread):
         return True
 
     def _ha_seen(self, device: str, seen: bool = True) -> bool:
-        """Call the HA device tracker 'see' service to update home/away status"""
-        device_slug = device.replace(":", "_")
+        """Publish MQTT messages register the device and update home/away status"""
+        device_slug = device_name = device.replace(":", "_")
         if self._settings.ap_name:
             device_slug = f"{self._settings.ap_name}_{device_slug}"
 
@@ -161,7 +176,7 @@ class PresenceDetector(Thread):
                 "state_topic": f"homeassistant/device_tracker/{device_slug}/state",
                 "json_attributes_topic": f"homeassistant/device_tracker/{device_slug}/state",
                 "value_template": "{{ value_json['state'] }}",
-                "name": device_slug,
+                "name": device_name,
                 "platform": "device_tracker",
                 "payload_home": self._settings.location,
                 "payload_not_home": self._settings.away,
@@ -170,8 +185,9 @@ class PresenceDetector(Thread):
                 "unique_id": device_slug,
             }
             if device in self._settings.params:
-                body.update(self._settings.params[device])
-            body["device"]["name"] = body["name"]
+                body = Settings.deep_merge(body, self._settings.params[device])
+                if "name" not in body["device"]:
+                    body["device"]["name"] = body["name"]
             # Register the device in HA
             ok &= self._publish(
                 f"homeassistant/device_tracker/{device_slug}/config", json.dumps(body)
