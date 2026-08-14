@@ -108,6 +108,7 @@ class QueueItem:
         ADD = 1
         DELETE = 2
         QUIT = 3
+        RESET_CACHE = 4
 
     device: str
     interface: str
@@ -127,6 +128,7 @@ class PresenceDetector(Thread):
         self._last_seen_clients: set[tuple[str, str]] = set()
         self._online_clients: dict[str, set[str]] = {}
         self._registered_clients: set[str] = set()
+        self._mqtt_connected = False  # MQTT connection state flag
         for interface in self._settings.interfaces:
             self._online_clients[interface] = set()
         self._connect_to_mqtt()
@@ -139,6 +141,11 @@ class PresenceDetector(Thread):
         else:
             # Version 1 is deprecated but still supported
             self._mqtt = mqtt.Client()
+        
+        # Set callbacks for connection/disconnection events
+        self._mqtt.on_connect = self._on_mqtt_connect
+        self._mqtt.on_disconnect = self._on_mqtt_disconnect
+        
         self._mqtt.username_pw_set(
             self._settings.mqtt_username, self._settings.mqtt_password
         )
@@ -152,10 +159,34 @@ class PresenceDetector(Thread):
         )
         self._mqtt.loop_start()
 
+    def _on_mqtt_connect(self, client, userdata, flags, reason_code, properties=None):
+        """Callback when successfully connected to MQTT broker"""
+        self._mqtt_connected = True
+        self._logger.log(f"Connected to MQTT broker at {self._settings.mqtt_host}")
+        # Reset registration cache on reconnection
+        self._reset_registration_cache()
+
+    def _on_mqtt_disconnect(self, client, userdata, reason_code, properties=None):
+        """Callback when disconnected from MQTT broker"""
+        self._mqtt_connected = False
+        self._logger.log(f"Disconnected from MQTT broker, reason_code: {reason_code}")
+        # Reset cache on disconnect to re-register devices on reconnection
+        self._reset_registration_cache()
+
+    def _reset_registration_cache(self):
+        """Reset the registration cache for devices"""
+        if self._registered_clients:
+            self._logger.log(f"Resetting registration cache ({len(self._registered_clients)} devices)")
+            self._registered_clients.clear()
+            # Add task to the queue for cache reset
+            self._queue.put(QueueItem("", "", QueueItem.Action.RESET_CACHE))
+
     def _on_ha_status_message(self, _client, _userdata, message):
         """Callback for HA status messages"""
         if message.payload == b"offline":
             self._logger.log("Home Assistant is offline!")
+            # Reset cache when HA goes offline
+            self._reset_registration_cache()
         elif message.payload == b"online":
             self._logger.log("Home Assistant is back online")
             self._do_full_sync()
@@ -333,6 +364,12 @@ class PresenceDetector(Thread):
             if item.action == QueueItem.Action.QUIT:
                 self._queue.task_done()
                 break
+            
+            if item.action == QueueItem.Action.RESET_CACHE:
+                # Cache reset already done in _reset_registration_cache
+                self._logger.log("Cache reset completed", True)
+                self._queue.task_done()
+                continue
 
             if self._ha_seen(item.device, item.action == QueueItem.Action.ADD):
                 if mq_is_offline:
