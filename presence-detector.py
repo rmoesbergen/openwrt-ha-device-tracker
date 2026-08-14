@@ -136,6 +136,7 @@ class PresenceDetector(Thread):
             self._mqtt = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2
             )
+            self._mqtt.on_disconnect = self._on_mqtt_disconnect
         else:
             # Version 1 is deprecated but still supported
             self._mqtt = mqtt.Client()
@@ -152,10 +153,18 @@ class PresenceDetector(Thread):
         )
         self._mqtt.loop_start()
 
+    def _on_mqtt_disconnect(
+        self, _client, _userdata, _disconnect_flags, reason_code, _properties
+    ):
+        """Callback for MQTT disconnections"""
+        self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
+        self._registered_clients.clear()
+
     def _on_ha_status_message(self, _client, _userdata, message):
         """Callback for HA status messages"""
         if message.payload == b"offline":
             self._logger.log("Home Assistant is offline!")
+            self._registered_clients.clear()
         elif message.payload == b"online":
             self._logger.log("Home Assistant is back online")
             self._do_full_sync()
