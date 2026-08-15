@@ -161,9 +161,7 @@ class PresenceDetector(Thread):
         self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
         self._registered_clients.clear()
 
-    def _on_mqtt_disconnect_v1(
-        self, _client, _userdata, reason_code, _properties=None
-    ):
+    def _on_mqtt_disconnect_v1(self, _client, _userdata, reason_code, _properties=None):
         """Callback for MQTT disconnections"""
         self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
         self._registered_clients.clear()
