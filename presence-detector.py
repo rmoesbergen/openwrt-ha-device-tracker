@@ -140,6 +140,7 @@ class PresenceDetector(Thread):
         else:
             # Version 1 is deprecated but still supported
             self._mqtt = mqtt.Client()
+            self._mqtt.on_disconnect = self._on_mqtt_disconnect_v1
         self._mqtt.username_pw_set(
             self._settings.mqtt_username, self._settings.mqtt_password
         )
@@ -155,6 +156,13 @@ class PresenceDetector(Thread):
 
     def _on_mqtt_disconnect(
         self, _client, _userdata, _disconnect_flags, reason_code, _properties
+    ):
+        """Callback for MQTT disconnections"""
+        self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
+        self._registered_clients.clear()
+
+    def _on_mqtt_disconnect_v1(
+        self, _client, _userdata, reason_code, _properties=None
     ):
         """Callback for MQTT disconnections"""
         self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
