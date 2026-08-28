@@ -1,0 +1,34 @@
+#!/bin/sh /etc/rc.common
+
+START=90
+STOP=1
+USE_PROCD=1
+NAME=presence-detector
+PROG=/usr/bin/presence-detector.sh
+
+start_service() {
+	procd_open_instance
+	procd_set_param command "$PROG"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param respawn
+	procd_set_param term_timeout 10
+	procd_close_instance
+}
+
+# Explicit teardown. The daemon forks background watchers that block on
+# `ubus subscribe` / `mosquitto_sub` reads; relying solely on the script's
+# own SIGTERM trap is fragile (a blocked child can reparent to init and be
+# missed). This reap runs after procd signals the main process and removes
+# any stragglers by pattern so nothing leaks across restarts.
+stop_service() {
+	# Signal the script to stop (its watcher/main loops poll this flag).
+	touch /var/run/presence-detector/.stop 2>/dev/null
+	# Reap any leftover watcher grandchildren. busybox has pgrep, not pkill.
+	local pids
+	pids=$( { pgrep -f 'ubus subscribe hostapd'; pgrep -f 'mosquitto_sub.*homeassistant/status'; } 2>/dev/null | sort -u )
+	[ -n "$pids" ] && kill $pids 2>/dev/null
+	sleep 1
+	pids=$( { pgrep -f 'ubus subscribe hostapd'; pgrep -f 'mosquitto_sub.*homeassistant/status'; } 2>/dev/null | sort -u )
+	[ -n "$pids" ] && kill -9 $pids 2>/dev/null
+}

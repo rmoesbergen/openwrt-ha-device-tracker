@@ -1,3 +1,5 @@
 presence-detector.settings.json
+presence-detector.settings.*.json
+!presence-detector.settings.*.json.example
 .idea/
 venv/
