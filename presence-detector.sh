@@ -237,6 +237,23 @@ get_all_online_devices() {
 
 do_full_sync() {
 	# Re-register everything and publish current state for all online devices.
+	#
+	# Debounce: the retained homeassistant/status "online" message is
+	# delivered immediately after startup (right after main's own sync) and on
+	# every mosquitto_sub reconnect. Without this guard those would each
+	# trigger a redundant full re-sync. Skip if we synced < 30s ago.
+	local now
+	now=$(date +%s 2>/dev/null || echo 0)
+	if [ -f "$RUNDIR/.last_sync" ]; then
+		local last
+		last=$(cat "$RUNDIR/.last_sync" 2>/dev/null || echo 0)
+		if [ "$now" -gt 0 ] && [ "$last" -gt 0 ] && [ $((now - last)) -lt 30 ]; then
+			log "Skipping redundant full sync (last was $((now - last))s ago)" 1
+			return 0
+		fi
+	fi
+	echo "$now" > "$RUNDIR/.last_sync" 2>/dev/null
+
 	reset_registrations
 	local seen_file="$RUNDIR/.seen_now"
 	get_all_online_devices | sort -u > "$seen_file"
@@ -342,18 +359,27 @@ cleanup() {
 	log "Stopping..."
 	touch "$RUNDIR/.stop" 2>/dev/null
 	trap '' TERM INT
-	# Kill the whole process group so that grandchildren spawned inside
-	# watcher pipes (ubus subscribe, mosquitto_sub) are terminated too, not
-	# just the direct background jobs.
+	# Kill the direct background jobs (the watcher subshells).
 	kill $CHILD_PIDS 2>/dev/null
-	# Best-effort cleanup of the streaming subprocesses in case they were
-	# reparented (e.g. their parent pipe subshell already exited).
+	# Also kill the streaming grandchildren (ubus subscribe / mosquitto_sub)
+	# spawned inside the watcher pipes. busybox has `pgrep` but NOT `pkill`,
+	# so find PIDs with pgrep and kill them explicitly.
+	local gp
 	for interface in $INTERFACES; do
-		pkill -f "ubus subscribe $interface" 2>/dev/null
+		gp=$(pgrep -f "ubus subscribe $interface" 2>/dev/null)
+		[ -n "$gp" ] && kill $gp 2>/dev/null
 	done
-	pkill -f "mosquitto_sub.*homeassistant/status" 2>/dev/null
+	gp=$(pgrep -f "mosquitto_sub.*homeassistant/status" 2>/dev/null)
+	[ -n "$gp" ] && kill $gp 2>/dev/null
 	sleep 1
+	# Force any survivors.
 	kill -9 $CHILD_PIDS 2>/dev/null
+	for interface in $INTERFACES; do
+		gp=$(pgrep -f "ubus subscribe $interface" 2>/dev/null)
+		[ -n "$gp" ] && kill -9 $gp 2>/dev/null
+	done
+	gp=$(pgrep -f "mosquitto_sub.*homeassistant/status" 2>/dev/null)
+	[ -n "$gp" ] && kill -9 $gp 2>/dev/null
 	exit 0
 }
 
@@ -376,6 +402,12 @@ main() {
 	done
 
 	load_settings
+	# Clear any stale stop-flag left behind by a previous instance's cleanup.
+	# Without this, a single procd restart becomes an infinite crash loop:
+	# the new instance's watcher loops and main loop all test for .stop and
+	# would exit immediately if the previous cleanup's flag were still present.
+	mkdir -p "$RUNDIR"
+	rm -f "$RUNDIR/.stop" 2>/dev/null
 	reset_registrations
 	trap cleanup TERM INT
 
@@ -397,15 +429,20 @@ main() {
 		CHILD_PIDS="$CHILD_PIDS $!"
 	done
 
-	# Main loop: perform periodic fallback full sync if configured.
+	# Main loop. With a fallback interval, periodically re-sync. Without one,
+	# just block so the main process stays in the foreground for procd.
+	#
+	# NOTE: we deliberately do NOT use "sleep N & wait $!" here. When the
+	# background watcher children exit/respawn they deliver SIGCHLD, which
+	# interrupts `wait` and would spin this loop (and destabilise the procd
+	# instance). A plain foreground `sleep` is not affected by SIGCHLD.
 	while [ ! -f "$RUNDIR/.stop" ]; do
 		if [ "$FALLBACK_SYNC_INTERVAL" -gt 0 ] 2>/dev/null; then
 			sleep "$FALLBACK_SYNC_INTERVAL"
 			[ -f "$RUNDIR/.stop" ] && break
 			do_full_sync
 		else
-			sleep 3600 &
-			wait $!
+			sleep 3600
 		fi
 	done
 
