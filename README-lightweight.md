@@ -32,6 +32,7 @@ The shell version needs only:
 | `mosquitto-client` | Provides `mosquitto_pub` / `mosquitto_sub` (~50–150 KB)      |
 | `jsonfilter`       | Part of base OpenWRT — used to parse the settings file       |
 | `ubus`             | Part of base OpenWRT                                         |
+| `ucode`            | Base OpenWRT (22.03+) — optional; enables full `params` deep-merge (falls back to name+icon without it) |
 | `logger`, `grep`, `tr`, `awk`, `sort` | All provided by busybox (already present) |
 
 In practice this is around **100–200 KB** instead of several megabytes, and
@@ -117,10 +118,24 @@ excludes `presence-detector.settings.json` and
 
 Notes / minor differences:
 
-* **`params`**: The shell version reads the per-device `name` and `icon`
-  overrides (the two commonly used keys). If you need to pass through other
-  arbitrary discovery keys, use the Python version — the shell version keeps
-  the params handling deliberately simple to stay small.
+* **`params`**: On OpenWRT 22.03+ (where `ucode` is present) the **entire**
+  params block for a device is deep-merged into the MQTT discovery config, so
+  **any** key works — including nested `device` keys like `manufacturer`,
+  `model`, `sw_version`, `configuration_url`, etc. — matching the Python
+  version. Example:
+  ```json
+  "params": {
+    "a0:85:e3:c5:b5:a4": {
+      "name": "Fridge Plug",
+      "icon": "mdi:fridge",
+      "device": { "manufacturer": "Shelly", "model": "Plus Plug S" }
+    }
+  }
+  ```
+  On a minimal build **without `ucode`**, the script falls back to a
+  string-built config that supports only `name` + `icon` (it logs a note at
+  startup). Either way, when a device is named the entity name is emitted as
+  `null` so Home Assistant shows the name once rather than doubled.
 * **`interfaces`**: As with the Python version, leave empty (`[]`) to
   auto-detect all `hostapd.*` interfaces.
 * **`ap_name`**: Prefixes the entity's **`unique_id` and MQTT topic** with the
@@ -252,8 +267,8 @@ daemon.debug presence-detector[1234]: Publishing to homeassistant/device_tracker
 | MQTT auto-discovery | ✅ | ✅ |
 | HA online/offline recovery | ✅ | ✅ |
 | Fallback periodic sync | ✅ | ✅ |
-| Arbitrary `params` passthrough | `name` + `icon` only | Any discovery key |
+| Arbitrary `params` passthrough | ✅ with `ucode` (22.03+); name+icon on minimal builds | Any discovery key |
 
 For most single/dual-radio access points the shell version is fully
-equivalent. Pick the Python version only if you rely on advanced `params`
-passthrough.
+equivalent — including full `params` passthrough on OpenWRT 22.03+. Only on a
+minimal build without `ucode` does `params` narrow to `name` + `icon`.

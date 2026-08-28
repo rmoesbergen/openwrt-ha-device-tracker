@@ -80,6 +80,18 @@ load_settings() {
 		log "No wifi interfaces found or configured!"
 		exit 1
 	fi
+
+	# Detect ucode (present on OpenWRT 22.03+). When available we build the
+	# MQTT discovery config with a real JSON deep-merge, so ANY key in a
+	# device's params block is honoured (including nested "device" keys such
+	# as manufacturer / model / sw_version). Without ucode we fall back to a
+	# minimal string-built config that supports only name + icon.
+	if command -v ucode >/dev/null 2>&1; then
+		HAS_UCODE=1
+	else
+		HAS_UCODE=0
+		log "ucode not found: params limited to name+icon (install ucode / OpenWRT >= 22.03 for full params)"
+	fi
 }
 
 # ---------------------------------------------------------------------------
@@ -175,40 +187,71 @@ ha_seen() {
 	if ! is_registered "$device_slug"; then
 		mark_registered "$device_slug"
 
-		# Look up per-device overrides for name / icon from params.
-		local override_name
-		override_name=$(jsonfilter -i "$CONFIG" -e "@.params['$device'].name" 2>/dev/null)
-		local override_icon
-		override_icon=$(jsonfilter -i "$CONFIG" -e "@.params['$device'].icon" 2>/dev/null)
-
-		# Entity name vs device name.
-		#
-		# HA's MQTT discovery uses "has_entity_name": when an entity has BOTH
-		# a device with a name AND its own name, the displayed friendly_name
-		# becomes "<device name> <entity name>". If both are the same string
-		# (as they would be with a params override) that yields an ugly
-		# doubled name ("Presencia Cocina Presencia Cocina").
-		#
-		# So: when a params name override is given, put it on the DEVICE and
-		# emit a JSON null entity name (the entity inherits the device name,
-		# shown once). With no override, use the bare MAC as the entity name
-		# and give the device no name (matching upstream's default).
-		local name_field
-		local device_block="\"connections\":[[\"mac\",\"$device\"]]"
-		if [ -n "$override_name" ]; then
-			name_field="\"name\":null,"
-			device_block="$device_block,\"name\":\"$override_name\""
-		else
-			name_field="\"name\":\"$device_name\","
-		fi
-
-		local icon_field=""
-		[ -n "$override_icon" ] && icon_field="\"icon\":\"$override_icon\","
-
 		local config_topic="homeassistant/device_tracker/${device_slug}/config"
 		local state_topic="homeassistant/device_tracker/${device_slug}/state"
 		local body
-		body="{\"state_topic\":\"$state_topic\",\"json_attributes_topic\":\"$state_topic\",\"value_template\":\"{{ value_json['state'] }}\",${name_field}${icon_field}\"platform\":\"device_tracker\",\"payload_home\":\"$LOCATION\",\"payload_not_home\":\"$AWAY\",\"source_type\":\"$SOURCE_TYPE\",\"device\":{$device_block},\"unique_id\":\"$device_slug\"}"
+
+		if [ "$HAS_UCODE" = "1" ]; then
+			# Full path: deep-merge the device's entire params block into the
+			# discovery config via ucode, so arbitrary keys work (including
+			# nested device keys: manufacturer, model, sw_version, ...).
+			# Doubling fix: if the device ends up named, the entity name is
+			# set to null so HA shows the device name once.
+			body=$(ucode -l fs \
+				-D CFG="$CONFIG" -D DEV="$device" -D SLUG="$device_slug" \
+				-D LOC="$LOCATION" -D AWAY="$AWAY" -D STYPE="$SOURCE_TYPE" \
+				-e '
+					let fp = fs.open(CFG, "r");
+					let settings = json(fp.read("all")); fp.close();
+					let params = (settings.params && settings.params[DEV]) ? settings.params[DEV] : {};
+					let st = sprintf("homeassistant/device_tracker/%s/state", SLUG);
+					let body = {
+						state_topic: st, json_attributes_topic: st,
+						value_template: "{{ value_json[\x27state\x27] }}",
+						name: replace(DEV, ":", "_"),
+						platform: "device_tracker",
+						payload_home: LOC, payload_not_home: AWAY,
+						source_type: STYPE,
+						device: { connections: [ ["mac", DEV] ] },
+						unique_id: SLUG
+					};
+					function dm(a, b) {
+						for (let k in b) {
+							if (type(a[k]) == "object" && type(b[k]) == "object")
+								dm(a[k], b[k]);
+							else
+								a[k] = b[k];
+						}
+						return a;
+					}
+					dm(body, params);
+					if (!body.device.name && params.name) body.device.name = params.name;
+					if (body.device.name) body.name = null;
+					print(body);
+				' 2>/dev/null)
+		fi
+
+		if [ -z "$body" ]; then
+			# Fallback path (no ucode, or ucode failed): string-built config
+			# supporting only name + icon overrides. Same doubling fix.
+			local override_name
+			override_name=$(jsonfilter -i "$CONFIG" -e "@.params['$device'].name" 2>/dev/null)
+			local override_icon
+			override_icon=$(jsonfilter -i "$CONFIG" -e "@.params['$device'].icon" 2>/dev/null)
+
+			local name_field
+			local device_block="\"connections\":[[\"mac\",\"$device\"]]"
+			if [ -n "$override_name" ]; then
+				name_field="\"name\":null,"
+				device_block="$device_block,\"name\":\"$override_name\""
+			else
+				name_field="\"name\":\"$device_name\","
+			fi
+			local icon_field=""
+			[ -n "$override_icon" ] && icon_field="\"icon\":\"$override_icon\","
+
+			body="{\"state_topic\":\"$state_topic\",\"json_attributes_topic\":\"$state_topic\",\"value_template\":\"{{ value_json['state'] }}\",${name_field}${icon_field}\"platform\":\"device_tracker\",\"payload_home\":\"$LOCATION\",\"payload_not_home\":\"$AWAY\",\"source_type\":\"$SOURCE_TYPE\",\"device\":{$device_block},\"unique_id\":\"$device_slug\"}"
+		fi
 
 		mqtt_pub "$config_topic" "$body"
 		ok=$?
