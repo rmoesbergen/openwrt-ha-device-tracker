@@ -66,15 +66,18 @@ On your OpenWRT device:
    ```
    (`jsonfilter` and `ubus` are already part of the base system.)
 
-2. Copy `presence-detector.sh` and your settings file to a persistent location
-   (e.g. `/etc/config`). Start from the provided example and fill in your own
-   MQTT credentials:
+2. Install the executable to `/usr/bin` (executables belong here, not in
+   `/etc/config`), and copy the settings file into `/etc/config`. Start from
+   the provided example and fill in your own MQTT credentials:
    ```bash
-   cp presence-detector.sh /etc/config/presence-detector.sh
+   cp presence-detector.sh /usr/bin/presence-detector.sh
+   chmod +x /usr/bin/presence-detector.sh
    cp presence-detector.settings.json.example /etc/config/presence-detector.settings.json
    # then edit /etc/config/presence-detector.settings.json (set mqtt_password, etc.)
-   chmod +x /etc/config/presence-detector.sh
    ```
+   The script looks for its settings at
+   `/etc/config/presence-detector.settings.json` by default; override with
+   `-c /path/to/settings.json` if you keep it elsewhere.
 
 3. Install the init script (renamed to the standard service name):
    ```bash
@@ -224,7 +227,7 @@ your automations on `person.<name>` instead of the individual trackers.
 You can run it in the foreground to watch what it does:
 
 ```bash
-/etc/config/presence-detector.sh -c /etc/config/presence-detector.settings.json
+/usr/bin/presence-detector.sh -c /etc/config/presence-detector.settings.json
 ```
 
 Log output goes to syslog; read it with:
