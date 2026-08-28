@@ -181,12 +181,25 @@ ha_seen() {
 		local override_icon
 		override_icon=$(jsonfilter -i "$CONFIG" -e "@.params['$device'].icon" 2>/dev/null)
 
-		local name="$device_name"
-		[ -n "$override_name" ] && name="$override_name"
-
+		# Entity name vs device name.
+		#
+		# HA's MQTT discovery uses "has_entity_name": when an entity has BOTH
+		# a device with a name AND its own name, the displayed friendly_name
+		# becomes "<device name> <entity name>". If both are the same string
+		# (as they would be with a params override) that yields an ugly
+		# doubled name ("Presencia Cocina Presencia Cocina").
+		#
+		# So: when a params name override is given, put it on the DEVICE and
+		# emit a JSON null entity name (the entity inherits the device name,
+		# shown once). With no override, use the bare MAC as the entity name
+		# and give the device no name (matching upstream's default).
+		local name_field
 		local device_block="\"connections\":[[\"mac\",\"$device\"]]"
 		if [ -n "$override_name" ]; then
+			name_field="\"name\":null,"
 			device_block="$device_block,\"name\":\"$override_name\""
+		else
+			name_field="\"name\":\"$device_name\","
 		fi
 
 		local icon_field=""
@@ -195,7 +208,7 @@ ha_seen() {
 		local config_topic="homeassistant/device_tracker/${device_slug}/config"
 		local state_topic="homeassistant/device_tracker/${device_slug}/state"
 		local body
-		body="{\"state_topic\":\"$state_topic\",\"json_attributes_topic\":\"$state_topic\",\"value_template\":\"{{ value_json['state'] }}\",\"name\":\"$name\",${icon_field}\"platform\":\"device_tracker\",\"payload_home\":\"$LOCATION\",\"payload_not_home\":\"$AWAY\",\"source_type\":\"$SOURCE_TYPE\",\"device\":{$device_block},\"unique_id\":\"$device_slug\"}"
+		body="{\"state_topic\":\"$state_topic\",\"json_attributes_topic\":\"$state_topic\",\"value_template\":\"{{ value_json['state'] }}\",${name_field}${icon_field}\"platform\":\"device_tracker\",\"payload_home\":\"$LOCATION\",\"payload_not_home\":\"$AWAY\",\"source_type\":\"$SOURCE_TYPE\",\"device\":{$device_block},\"unique_id\":\"$device_slug\"}"
 
 		mqtt_pub "$config_topic" "$body"
 		ok=$?
