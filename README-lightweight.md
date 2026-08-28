@@ -120,11 +120,13 @@ Notes / minor differences:
   the params handling deliberately simple to stay small.
 * **`interfaces`**: As with the Python version, leave empty (`[]`) to
   auto-detect all `hostapd.*` interfaces.
-* **`ap_name`**: Prefixes the entity — both its `unique_id`/MQTT topic **and**
-  its name — with the AP name (e.g. `device_tracker.cocina_aa_bb_...`). Leave
-  as `""` for a single access point. Set a **distinct** value per AP when
+* **`ap_name`**: Prefixes the entity's **`unique_id` and MQTT topic** with the
+  AP name (e.g. topic `homeassistant/device_tracker/cocina_aa_bb_.../state`,
+  `unique_id: cocina_aa_bb_...`). It does **not** change the friendly `name`.
+  Leave as `""` for a single access point; set a **distinct** value per AP when
   running on multiple access points (see
-  [Multiple access points & roaming](#multiple-access-points--roaming)).
+  [Multiple access points & roaming](#multiple-access-points--roaming)). This
+  matches the upstream Python behavior exactly.
 * **`debug`**: When `true`, debug lines are written to syslog (`logread`).
 
 ## Multiple access points & roaming
@@ -146,23 +148,37 @@ Set a **different** `ap_name` on every router:
 { "ap_name": "bedroom",    "...": "..." }
 ```
 
-The same phone MAC then produces **one entity per AP**, all distinct:
+`ap_name` prefixes the **`unique_id` and MQTT topic** only, so the same phone
+MAC produces **one entity per AP**, each with a distinct registry identity:
 
 ```
-device_tracker.cocina_54_32_04_3d_b4_c8
-device_tracker.livingroom_54_32_04_3d_b4_c8
-device_tracker.bedroom_54_32_04_3d_b4_c8
+unique_id: cocina_54_32_04_3d_b4_c8
+unique_id: livingroom_54_32_04_3d_b4_c8
+unique_id: bedroom_54_32_04_3d_b4_c8
 ```
 
 Because every tracker carries the same `device.connections` MAC, Home Assistant
 groups all three under a **single device** per phone — while keeping them as
-separate tracker entities (distinct `unique_id`s).
+three separate tracker entities. The `ap_name` prefix on the `unique_id` is
+what keeps those three from colliding; the friendly `name` is left untouched.
 
-> **Do not use `params` name overrides in a multi-AP setup.** If all APs give
-> the same MAC the same friendly name, HA cannot derive distinct entity IDs and
-> will append numeric suffixes (`..._2`, `..._3`). Leave the auto
-> `<ap>_<mac>` naming in place and give devices a human-friendly identity via a
-> Person (below).
+### A note on entity IDs (you can ignore them)
+
+Home Assistant derives a tracker's **`entity_id` from its friendly `name`**,
+not from the `unique_id`. So if you give the same MAC a friendly name via
+`params` (e.g. `"name": "Celu de Alfre"`), all three AP entities want the same
+`entity_id` and HA disambiguates them with numeric suffixes
+(`device_tracker.celu_de_alfre`, `..._2`, `..._3`). Which AP gets which suffix
+is not predictable.
+
+**That is fine — you never reference these per-AP entity IDs directly.** They
+are plumbing. You combine them via the device / Person (below) and build
+automations on the Person. Feel free to set friendly names and icons in
+`params`; the harmless `_2`/`_3` suffixes on the underlying entities don't
+matter.
+
+(If you leave `params` empty, the entities are simply named by MAC —
+`device_tracker.54_32_04_3d_b4_c8` etc. — which are already distinct.)
 
 ### Why not one shared entity across APs?
 
@@ -172,7 +188,8 @@ phone moves from `cocina` to `livingroom`, `livingroom` publishes `home` while
 `cocina` publishes `not_home` for the same entity. Depending on ordering, the
 stale `not_home` can win and the device flips away even though it is connected.
 Each router only knows its own clients, so they cannot resolve this between
-themselves.
+themselves. Keeping a distinct `ap_name` per AP (so each publishes its own
+entity) plus combining in HA avoids the race entirely.
 
 ### Combine per person with a Person entity (recommended)
 
@@ -181,12 +198,12 @@ Person is `home` if **any** of its assigned device_trackers is home. Assign all
 of a person's per-AP trackers to their Person:
 
 * Settings → People → *(person)* → **"Select the devices that belong to this
-  person"** → add `device_tracker.cocina_<mac>`,
-  `device_tracker.livingroom_<mac>`, `device_tracker.bedroom_<mac>`.
+  person"** → add that person's tracker from each AP.
 
-As the phone roams, whichever AP currently sees it keeps the Person `home`,
-absorbing the per-AP `assoc`/`disassoc` race. Base your automations on
-`person.<name>` instead of the individual trackers.
+Since all of a phone's per-AP trackers share one **device**, they are easy to
+find together in that list. As the phone roams, whichever AP currently sees it
+keeps the Person `home`, absorbing the per-AP `assoc`/`disassoc` race. Base
+your automations on `person.<name>` instead of the individual trackers.
 
 > A `device_tracker` **group helper** is *not* available in Home Assistant
 > (the group helper only supports `binary_sensor`, `light`, `switch`, etc.), so
@@ -198,7 +215,8 @@ absorbing the per-AP `assoc`/`disassoc` race. Base your automations on
 1. Install `mosquitto-client` and the service on the new router (same steps as
    [Installation](#installation)).
 2. Use a settings file identical to your other APs but with a new `ap_name`.
-3. Start the service; the new `device_tracker.<newap>_<mac>` entities appear.
+3. Start the service; a new tracker entity for each phone appears under that
+   phone's existing device (one more tracker per device).
 4. In HA, add each new tracker to the relevant Person.
 
 ## Running manually / debugging

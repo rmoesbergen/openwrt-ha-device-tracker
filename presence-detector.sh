@@ -182,7 +182,6 @@ ha_seen() {
 		override_icon=$(jsonfilter -i "$CONFIG" -e "@.params['$device'].icon" 2>/dev/null)
 
 		local name="$device_name"
-		[ -n "$AP_NAME" ] && name="${AP_NAME}_${device_name}"
 		[ -n "$override_name" ] && name="$override_name"
 
 		local device_block="\"connections\":[[\"mac\",\"$device\"]]"
