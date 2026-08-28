@@ -136,33 +136,60 @@ class PresenceDetector(Thread):
             self._mqtt = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2
             )
+            self._mqtt.on_connect = self._on_mqtt_connect
             self._mqtt.on_disconnect = self._on_mqtt_disconnect
         else:
             # Version 1 is deprecated but still supported
             self._mqtt = mqtt.Client()
+            self._mqtt.on_connect = self._on_mqtt_connect_v1
             self._mqtt.on_disconnect = self._on_mqtt_disconnect_v1
+        if hasattr(self._mqtt, "on_connect_fail"):
+            self._mqtt.on_connect_fail = self._on_mqtt_connect_fail
         self._mqtt.username_pw_set(
             self._settings.mqtt_username, self._settings.mqtt_password
         )
-        self._mqtt.connect(
-            self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60
-        )
         self._mqtt.reconnect_delay_set(min_delay=1, max_delay=60)
-        self._mqtt.subscribe("homeassistant/status")
         self._mqtt.message_callback_add(
             "homeassistant/status", self._on_ha_status_message
         )
+        self._mqtt.connect_async(
+            self._settings.mqtt_host, self._settings.mqtt_port, keepalive=60
+        )
         self._mqtt.loop_start()
 
+    def _on_mqtt_connect(
+        self, _client, _userdata, _flags, reason_code, _properties=None
+    ):
+        """Callback for MQTT connection"""
+        if reason_code.is_failure:
+            self._logger.log(f"MQTT broker connection failed (rc: {reason_code})")
+            return
+        self._logger.log("MQTT broker connected")
+        self._mqtt.subscribe("homeassistant/status")
+
+    def _on_mqtt_connect_v1(
+        self, _client, _userdata, _flags, reason_code, _properties=None
+    ):
+        """Callback for MQTT connection (v1)"""
+        if reason_code == 0:
+            self._logger.log("MQTT broker connected")
+            self._mqtt.subscribe("homeassistant/status")
+        else:
+            self._logger.log(f"MQTT broker connection failed (rc: {reason_code})")
+
+    def _on_mqtt_connect_fail(self, _client, _userdata):
+        """Callback for MQTT connection failures"""
+        self._logger.log("MQTT broker connection failed, retrying...")
+
     def _on_mqtt_disconnect(
-        self, _client, _userdata, _disconnect_flags, reason_code, _properties
+        self, _client, _userdata, _disconnect_flags, reason_code, _properties=None
     ):
         """Callback for MQTT disconnections"""
         self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
         self._registered_clients.clear()
 
     def _on_mqtt_disconnect_v1(self, _client, _userdata, reason_code, _properties=None):
-        """Callback for MQTT disconnections"""
+        """Callback for MQTT disconnections (v1)"""
         self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
         self._registered_clients.clear()
 
@@ -182,10 +209,10 @@ class PresenceDetector(Thread):
         result = self._mqtt.publish(topic, data, qos=1, retain=retain)
         try:
             result.wait_for_publish(timeout=5)
-        except RuntimeError as ex:
+        except (RuntimeError, ValueError) as ex:
             self._logger.log(f"Error publishing to {topic}: {ex}", False)
             return False
-        return True
+        return result.is_published()
 
     def _ha_seen(self, device: str, seen: bool = True) -> bool:
         """Publish MQTT messages register the device and update home/away status"""
@@ -307,6 +334,7 @@ class PresenceDetector(Thread):
         self.stop_watchers()
         self._killed = True
         self._queue.put(QueueItem("quit", "", QueueItem.Action.QUIT))
+        self._mqtt.disconnect()
         self._mqtt.loop_stop()
 
     def _do_full_sync(self, away_only=False):
