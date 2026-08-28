@@ -359,11 +359,13 @@ cleanup() {
 	log "Stopping..."
 	touch "$RUNDIR/.stop" 2>/dev/null
 	trap '' TERM INT
-	# Kill the direct background jobs (the watcher subshells).
+	# Kill the direct background jobs (the watcher subshells)...
 	kill $CHILD_PIDS 2>/dev/null
-	# Also kill the streaming grandchildren (ubus subscribe / mosquitto_sub)
-	# spawned inside the watcher pipes. busybox has `pgrep` but NOT `pkill`,
-	# so find PIDs with pgrep and kill them explicitly.
+	# ...and the streaming grandchildren (ubus subscribe / mosquitto_sub)
+	# spawned inside the watcher pipes, which may have reparented to init.
+	# busybox has `pgrep` but NOT `pkill`, so match PIDs and kill them.
+	# (The init.d stop_service performs the same reap independently, so
+	# teardown does not rely on this trap firing.)
 	local gp
 	for interface in $INTERFACES; do
 		gp=$(pgrep -f "ubus subscribe $interface" 2>/dev/null)
@@ -372,7 +374,6 @@ cleanup() {
 	gp=$(pgrep -f "mosquitto_sub.*homeassistant/status" 2>/dev/null)
 	[ -n "$gp" ] && kill $gp 2>/dev/null
 	sleep 1
-	# Force any survivors.
 	kill -9 $CHILD_PIDS 2>/dev/null
 	for interface in $INTERFACES; do
 		gp=$(pgrep -f "ubus subscribe $interface" 2>/dev/null)
@@ -436,13 +437,22 @@ main() {
 	# background watcher children exit/respawn they deliver SIGCHLD, which
 	# interrupts `wait` and would spin this loop (and destabilise the procd
 	# instance). A plain foreground `sleep` is not affected by SIGCHLD.
+	#
+	# We poll in short (2s) increments rather than one long sleep so that a
+	# stop is noticed almost immediately: init.d stop_service writes the
+	# .stop flag, and we exit on the next tick and run cleanup — without
+	# depending on a SIGTERM trap interrupting a long `sleep` (unreliable on
+	# busybox ash), and well within procd's term_timeout.
+	local elapsed=0
 	while [ ! -f "$RUNDIR/.stop" ]; do
+		sleep 2
 		if [ "$FALLBACK_SYNC_INTERVAL" -gt 0 ] 2>/dev/null; then
-			sleep "$FALLBACK_SYNC_INTERVAL"
-			[ -f "$RUNDIR/.stop" ] && break
-			do_full_sync
-		else
-			sleep 3600
+			elapsed=$((elapsed + 2))
+			if [ "$elapsed" -ge "$FALLBACK_SYNC_INTERVAL" ]; then
+				elapsed=0
+				[ -f "$RUNDIR/.stop" ] && break
+				do_full_sync
+			fi
 		fi
 	done
 
