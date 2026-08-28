@@ -136,13 +136,11 @@ class PresenceDetector(Thread):
             self._mqtt = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2
             )
-            self._mqtt.on_connect = self._on_mqtt_connect
-            self._mqtt.on_disconnect = self._on_mqtt_disconnect
         else:
             # Version 1 is deprecated but still supported
             self._mqtt = mqtt.Client()
-            self._mqtt.on_connect = self._on_mqtt_connect_v1
-            self._mqtt.on_disconnect = self._on_mqtt_disconnect_v1
+        self._mqtt.on_connect = self._on_mqtt_connect
+        self._mqtt.on_disconnect = self._on_mqtt_disconnect
         if hasattr(self._mqtt, "on_connect_fail"):
             self._mqtt.on_connect_fail = self._on_mqtt_connect_fail
         self._mqtt.username_pw_set(
@@ -160,36 +158,25 @@ class PresenceDetector(Thread):
     def _on_mqtt_connect(
         self, _client, _userdata, _flags, reason_code, _properties=None
     ):
-        """Callback for MQTT connection"""
-        if reason_code.is_failure:
+        """Callback for MQTT connection (supports both v1 and v2 API)"""
+        is_failure = (
+            reason_code.is_failure
+            if hasattr(reason_code, "is_failure")
+            else reason_code != 0
+        )
+        if is_failure:
             self._logger.log(f"MQTT broker connection failed (rc: {reason_code})")
             return
         self._logger.log("MQTT broker connected")
         self._mqtt.subscribe("homeassistant/status")
 
-    def _on_mqtt_connect_v1(
-        self, _client, _userdata, _flags, reason_code, _properties=None
-    ):
-        """Callback for MQTT connection (v1)"""
-        if reason_code == 0:
-            self._logger.log("MQTT broker connected")
-            self._mqtt.subscribe("homeassistant/status")
-        else:
-            self._logger.log(f"MQTT broker connection failed (rc: {reason_code})")
-
     def _on_mqtt_connect_fail(self, _client, _userdata):
         """Callback for MQTT connection failures"""
         self._logger.log("MQTT broker connection failed, retrying...")
 
-    def _on_mqtt_disconnect(
-        self, _client, _userdata, _disconnect_flags, reason_code, _properties=None
-    ):
-        """Callback for MQTT disconnections"""
-        self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
-        self._registered_clients.clear()
-
-    def _on_mqtt_disconnect_v1(self, _client, _userdata, reason_code, _properties=None):
-        """Callback for MQTT disconnections (v1)"""
+    def _on_mqtt_disconnect(self, *args, **_kwargs):
+        """Callback for MQTT disconnections (supports both v1 and v2 API)"""
+        reason_code = args[3] if len(args) >= 4 else (args[2] if len(args) >= 3 else 0)
         self._logger.log(f"MQTT broker disconnected (rc: {reason_code})")
         self._registered_clients.clear()
 
