@@ -124,7 +124,7 @@ class PresenceDetector(Thread):
         self._queue: Queue = Queue()
         self._watchers: list[UbusWatcher] = []
         self._killed = False
-        self._last_seen_clients: set[tuple[str, str]] = set()
+        self._last_seen_clients: set[tuple[str, str]] | None = None
         self._online_clients: dict[str, set[str]] = {}
         self._registered_clients: set[str] = set()
         for interface in self._settings.interfaces:
@@ -328,13 +328,42 @@ class PresenceDetector(Thread):
         """Perform a full sync of all current online devices compared to last time"""
         self._registered_clients = set()
         seen_now = set(self._get_all_online_devices())
-        away = self._last_seen_clients - seen_now
+        is_first_sync = self._last_seen_clients is None
+        away = (self._last_seen_clients or set()) - seen_now
         self._last_seen_clients = seen_now
         for interface, client in seen_now:
             if not away_only:
                 self.set_device_home(interface, client)
         for interface, client in away:
             self.set_device_away(interface, client)
+
+        if is_first_sync:
+            # On the very first sync there is no prior state to diff
+            # against (self._last_seen_clients started out as None), so the
+            # "away" set above is always empty by construction. Without this,
+            # a device that is not currently connected but was previously
+            # marked home via a RETAINED MQTT state message from an earlier
+            # run of this process stays stuck home in HA forever: nothing
+            # ever tells HA otherwise, because the device simply never sends
+            # a fresh disassoc event if it is already absent right now.
+            #
+            # We can't discover arbitrary previously-tracked MACs from ubus
+            # alone, but every MAC listed in params is a known, named device
+            # we can proactively check right now against the current online
+            # list.
+            seen_macs = {client for _interface, client in seen_now}
+            for device in self._settings.params:
+                if device in seen_macs or not self._should_handle_device(device):
+                    continue
+                self._logger.log(
+                    f"Device {device} is away (first sync, no prior state)", True
+                )
+                # Call _ha_seen directly rather than set_device_away: the
+                # latter's per-interface bookkeeping (self._online_clients)
+                # is keyed by real interface names and is only meaningful
+                # for devices that were actually observed on one, which by
+                # definition isn't the case here.
+                self._ha_seen(device, seen=False)
 
     def run(self) -> None:
         """Main loop for the presence detector"""
