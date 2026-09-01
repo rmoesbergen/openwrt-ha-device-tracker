@@ -253,7 +253,14 @@ ha_seen() {
 			body="{\"state_topic\":\"$state_topic\",\"json_attributes_topic\":\"$state_topic\",\"value_template\":\"{{ value_json['state'] }}\",${name_field}${icon_field}\"platform\":\"device_tracker\",\"payload_home\":\"$LOCATION\",\"payload_not_home\":\"$AWAY\",\"source_type\":\"$SOURCE_TYPE\",\"device\":{$device_block},\"unique_id\":\"$device_slug\"}"
 		fi
 
-		mqtt_pub "$config_topic" "$body"
+		# Retain the discovery config, not just state. Without this, if HA
+		# is offline/restarting at the exact moment this one-shot config
+		# message is published, HA has no way to learn about the entity's
+		# MQTT subscription again until this script itself restarts (which
+		# forces a fresh republish via reset_registrations). A retained
+		# config lets HA's MQTT integration pick the entity back up on its
+		# own reconnect.
+		mqtt_pub "$config_topic" "$body" 1
 		ok=$?
 	fi
 
