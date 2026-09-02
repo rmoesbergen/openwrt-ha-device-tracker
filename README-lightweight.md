@@ -50,6 +50,15 @@ The behavior mirrors the Python version:
   Home Assistant comes back online, and clears its registration cache when HA
   goes offline (so devices get re-announced via MQTT discovery).
 * An optional **`fallback_sync_interval`** triggers a periodic full sync.
+* An optional **`away_debounce_seconds`** delays publishing "away" after a
+  `disassoc` event by that many seconds, and cancels the pending "away" if
+  the same device re-associates (same or a different interface) before the
+  window elapses. Off by default (`0`, matching the original instant
+  behavior). Useful when a device's Wi-Fi roams between bands/interfaces
+  on the same router, or briefly drops due to power-save/signal, producing
+  a home→away→home flap for every hop — see upstream issues
+  [#67](https://github.com/rmoesbergen/openwrt-ha-device-tracker/issues/67)
+  and [#50](https://github.com/rmoesbergen/openwrt-ha-device-tracker/issues/50).
 
 Registration state (which devices have already had their discovery config
 published) is tracked with marker files under `/var/run/presence-detector/`,
@@ -125,8 +134,8 @@ excludes `presence-detector.settings.json` and
 
 `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`,
 `mqtt_retain_state`, `interfaces`, `filter_is_denylist`, `filter`, `params`,
-`ap_name`, `location`, `away`, `fallback_sync_interval`, `source_type`,
-`debug`.
+`ap_name`, `location`, `away`, `fallback_sync_interval`, `away_debounce_seconds`,
+`source_type`, `debug`.
 
 Notes / minor differences:
 
