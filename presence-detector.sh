@@ -301,13 +301,18 @@ get_all_online_devices() {
 do_full_sync() {
 	# Re-register everything and publish current state for all online devices.
 	#
+	# force=1 bypasses the debounce below. Used when we know we may have
+	# missed events (e.g. a watcher just reconnected after an unexpected
+	# drop) and a "we synced recently" skip would be wrong here specifically.
+	local force="${1:-0}"
+
 	# Debounce: the retained homeassistant/status "online" message is
 	# delivered immediately after startup (right after main's own sync) and on
 	# every mosquitto_sub reconnect. Without this guard those would each
 	# trigger a redundant full re-sync. Skip if we synced < 30s ago.
 	local now
 	now=$(date +%s 2>/dev/null || echo 0)
-	if [ -f "$RUNDIR/.last_sync" ]; then
+	if [ "$force" != "1" ] && [ -f "$RUNDIR/.last_sync" ]; then
 		local last
 		last=$(cat "$RUNDIR/.last_sync" 2>/dev/null || echo 0)
 		if [ "$now" -gt 0 ] && [ "$last" -gt 0 ] && [ $((now - last)) -lt 30 ]; then
@@ -383,6 +388,8 @@ do_full_sync() {
 watch_interface() {
 	local interface="$1"
 	while [ ! -f "$RUNDIR/.stop" ]; do
+		local start_ts
+		start_ts=$(date +%s 2>/dev/null || echo 0)
 		# ubus subscribe streams JSON events, one per line-ish.
 		ubus subscribe "$interface" 2>/dev/null | while read -r line; do
 			[ -f "$RUNDIR/.stop" ] && break
@@ -409,9 +416,39 @@ watch_interface() {
 				;;
 			esac
 		done
-		# If ubus subscribe exits (interface gone), wait and retry.
 		[ -f "$RUNDIR/.stop" ] && break
-		sleep 5
+
+		# Distinguish two very different cases that both end up here:
+		#
+		#  1. The interface never existed / doesn't exist yet (typo, not-yet-
+		#     configured radio, or genuinely renamed e.g. after a firmware
+		#     upgrade renumbers phy0->phy1). ubus subscribe exits almost
+		#     instantly every time. Retrying here is expected steady-state
+		#     behavior while we wait for it to show up - it must stay quiet
+		#     and NOT force a full sync every few seconds, or a permanently
+		#     wrong interface name turns into a full-sync spam loop.
+		#
+		#  2. We WERE subscribed and connected for a while, then lost it -
+		#     e.g. hostapd tearing down and recreating the interface after a
+		#     network reconfig, ACS channel reselection, or a radio reset.
+		#     This is the case that can silently miss real assoc/disassoc
+		#     events, so it deserves a loud log line and an immediate full
+		#     sync to close the gap rather than waiting for the fallback
+		#     interval.
+		local end_ts elapsed
+		end_ts=$(date +%s 2>/dev/null || echo 0)
+		elapsed=$((end_ts - start_ts))
+		if [ "$elapsed" -ge 10 ]; then
+			log "ubus subscribe $interface lost connection after ${elapsed}s; reconnecting and forcing a full sync to close any gap" 0
+			# force=1 bypasses the redundant-sync debounce, which would
+			# otherwise silently swallow exactly the sync we need if this
+			# reconnect happens soon after any other sync.
+			do_full_sync 1
+			sleep 5
+		else
+			log "ubus subscribe $interface exited immediately (interface not present?); retrying" 1
+			sleep 15
+		fi
 	done
 }
 
