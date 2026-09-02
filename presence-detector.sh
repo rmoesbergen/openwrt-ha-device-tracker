@@ -63,6 +63,7 @@ load_settings() {
 	LOCATION=$(get_setting '@.location' 'home')
 	AWAY=$(get_setting '@.away' 'not_home')
 	FALLBACK_SYNC_INTERVAL=$(get_setting '@.fallback_sync_interval' '0')
+	AWAY_DEBOUNCE_SECONDS=$(get_setting '@.away_debounce_seconds' '0')
 	SOURCE_TYPE=$(get_setting '@.source_type' 'router')
 	DEBUG=$(get_setting '@.debug' 'false')
 	[ "$DEBUG" = "true" ] && DEBUG=1 || DEBUG=0
@@ -141,6 +142,33 @@ mark_registered() {
 }
 
 # ---------------------------------------------------------------------------
+# Away-debounce state
+# ---------------------------------------------------------------------------
+# A device roaming between interfaces/bands on the same router (or briefly
+# dropping due to power-save/signal) produces a disassoc immediately followed
+# by a fresh assoc, often within well under a second. Without debouncing that
+# publishes a home->away->home flap to HA for every such hop (see upstream
+# issues #67 and #50). When AWAY_DEBOUNCE_SECONDS > 0, a disassoc doesn't
+# publish "away" right away - it records a pending marker (named after the
+# device slug, same identity ha_seen already uses) and a background check
+# fires after the debounce window to publish "away" only if the marker is
+# still there. Any assoc for that device in the meantime removes the marker
+# first, so the delayed check finds it gone and does nothing - no flap.
+
+mark_pending_away() {
+	# mark_pending_away <device_slug>
+	echo "$1" > "$RUNDIR/$1.pending_away" 2>/dev/null
+}
+
+clear_pending_away() {
+	rm -f "$RUNDIR/$1.pending_away" 2>/dev/null
+}
+
+is_pending_away() {
+	[ -f "$RUNDIR/$1.pending_away" ]
+}
+
+# ---------------------------------------------------------------------------
 # Device filtering
 # ---------------------------------------------------------------------------
 
@@ -164,6 +192,18 @@ should_handle_device() {
 	[ "$FILTER_IS_DENYLIST" = "true" ] && return 0 || return 1
 }
 
+# device_slug: mac with ':' -> '_', optionally prefixed by ap_name. Shared by
+# ha_seen and the away-debounce markers so both key off the same identity.
+device_slug() {
+	local device_name
+	device_name=$(echo "$1" | tr ':' '_')
+	if [ -n "$AP_NAME" ]; then
+		echo "${AP_NAME}_${device_name}"
+	else
+		echo "$device_name"
+	fi
+}
+
 # ---------------------------------------------------------------------------
 # JSON escaping for params passthrough
 # ---------------------------------------------------------------------------
@@ -174,13 +214,10 @@ ha_seen() {
 	local device="$1"
 	local seen="$2"
 
-	# device_slug: mac with ':' -> '_', optionally prefixed by ap_name
 	local device_name
+	local device_slug
 	device_name=$(echo "$device" | tr ':' '_')
-	local device_slug="$device_name"
-	if [ -n "$AP_NAME" ]; then
-		device_slug="${AP_NAME}_${device_name}"
-	fi
+	device_slug=$(device_slug "$device")
 
 	local ok=0
 
@@ -400,6 +437,11 @@ watch_interface() {
 					head -n1 | cut -d'"' -f4 | tr 'A-Z' 'a-z')
 				[ -z "$mac" ] && continue
 				if should_handle_device "$mac"; then
+					# Cancel any pending debounced "away" for this device -
+					# it just reappeared (same interface, another interface
+					# on this router, or reconnected after a brief drop), so
+					# the delayed check below must find nothing and no-op.
+					clear_pending_away "$(device_slug "$mac")"
 					log "Device $mac on $interface is now at $LOCATION" 1
 					ha_seen "$mac" 1
 				fi
@@ -410,8 +452,36 @@ watch_interface() {
 					head -n1 | cut -d'"' -f4 | tr 'A-Z' 'a-z')
 				[ -z "$mac" ] && continue
 				if should_handle_device "$mac"; then
-					log "Device $mac on $interface is now away" 1
-					ha_seen "$mac" 0
+					if [ "$AWAY_DEBOUNCE_SECONDS" -gt 0 ] 2>/dev/null; then
+						local slug
+						slug=$(device_slug "$mac")
+						mark_pending_away "$slug"
+						log "Device $mac on $interface disassociated; debouncing ${AWAY_DEBOUNCE_SECONDS}s before marking away" 1
+						(
+							sleep "$AWAY_DEBOUNCE_SECONDS"
+							# Don't act past shutdown, and only publish away
+							# if nothing re-marked this device home (via
+							# clear_pending_away) while we were sleeping.
+							if [ ! -f "$RUNDIR/.stop" ] && is_pending_away "$slug"; then
+								clear_pending_away "$slug"
+								log "Device $mac is now away (debounced)" 1
+								ha_seen "$mac" 0
+							fi
+						) &
+						# Record the PID (append-only, never pruned at
+						# runtime - a few bytes per roam event is negligible
+						# on tmpfs) so cleanup() can reap it precisely by
+						# PID. A plain `sleep` has nothing in its own
+						# command line to distinguish it, so a pgrep -f name
+						# match here would be exactly the kind of overbroad
+						# match that self-matches unrelated ash processes;
+						# killing a PID that already exited is a silent
+						# no-op, so a stale entry is harmless.
+						echo "$!" >> "$RUNDIR/.debounce_pids" 2>/dev/null
+					else
+						log "Device $mac on $interface is now away" 1
+						ha_seen "$mac" 0
+					fi
 				fi
 				;;
 			esac
@@ -499,6 +569,14 @@ cleanup() {
 	done
 	gp=$(pgrep -f "mosquitto_sub.*homeassistant/status" 2>/dev/null)
 	[ -n "$gp" ] && kill $gp 2>/dev/null
+	# Any in-flight away-debounce sleeps (see watch_interface). Each already
+	# re-checks $RUNDIR/.stop before acting, so this is belt-and-suspenders
+	# against a message being published after we've stopped. Killed by PID
+	# (not name match - see the comment where these PIDs are recorded);
+	# killing an already-exited PID is a silent no-op.
+	if [ -f "$RUNDIR/.debounce_pids" ]; then
+		kill $(cat "$RUNDIR/.debounce_pids" 2>/dev/null) 2>/dev/null
+	fi
 	sleep 1
 	kill -9 $CHILD_PIDS 2>/dev/null
 	for interface in $INTERFACES; do
@@ -507,6 +585,10 @@ cleanup() {
 	done
 	gp=$(pgrep -f "mosquitto_sub.*homeassistant/status" 2>/dev/null)
 	[ -n "$gp" ] && kill -9 $gp 2>/dev/null
+	if [ -f "$RUNDIR/.debounce_pids" ]; then
+		kill -9 $(cat "$RUNDIR/.debounce_pids" 2>/dev/null) 2>/dev/null
+		rm -f "$RUNDIR/.debounce_pids" 2>/dev/null
+	fi
 	exit 0
 }
 
@@ -535,6 +617,10 @@ main() {
 	# would exit immediately if the previous cleanup's flag were still present.
 	mkdir -p "$RUNDIR"
 	rm -f "$RUNDIR/.stop" 2>/dev/null
+	# Same idea for the away-debounce PID list and any pending markers: a
+	# hard kill (kill -9 on the main process itself) bypasses cleanup(), so
+	# don't inherit a previous instance's now-meaningless PIDs/markers.
+	rm -f "$RUNDIR/.debounce_pids" "$RUNDIR"/*.pending_away 2>/dev/null
 	reset_registrations
 	trap cleanup TERM INT
 
