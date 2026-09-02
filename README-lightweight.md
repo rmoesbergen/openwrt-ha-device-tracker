@@ -29,7 +29,7 @@ The shell version needs only:
 
 | Dependency         | Notes                                                        |
 |--------------------|--------------------------------------------------------------|
-| `mosquitto-client` | Provides `mosquitto_pub` / `mosquitto_sub` (~50–150 KB)      |
+| `mosquitto-client-nossl` | Provides `mosquitto_pub` / `mosquitto_sub` (~144 KiB; the `-ssl` alternative is ~216 KiB and unneeded — see [Installation](#installation)) |
 | `jsonfilter`       | Part of base OpenWRT — used to parse the settings file       |
 | `ubus`             | Part of base OpenWRT                                         |
 | `ucode`            | Base OpenWRT (22.03+) — optional; enables full `params` deep-merge (falls back to name+icon without it) |
@@ -59,13 +59,25 @@ so the asynchronous watchers and the main loop share state without threads.
 
 On your OpenWRT device:
 
-1. Install the only extra dependency:
+1. Install the only extra dependency. Use the **`-nossl`** variant explicitly
+   — this package ships as two alternatives (`mosquitto-client-nossl` and
+   `mosquitto-client-ssl`, ~144 KiB vs ~216 KiB installed), and the plain
+   `mosquitto-client` name is ambiguous between them. Which one it resolves
+   to isn't guaranteed, and on at least one very space-constrained device
+   the SSL variant got pulled in and caused an out-of-space install failure.
+   Since this script only ever talks to the broker in plain TCP (no `mqtts://`
+   / TLS), the SSL variant buys nothing here — always ask for `-nossl` by name:
    ```bash
-   opkg update && opkg install mosquitto-client
-   # or, on apk-based OpenWRT (snapshot):
-   # apk update && apk add mosquitto-client
+   opkg update && opkg install mosquitto-client-nossl
+   # or, on apk-based OpenWRT:
+   # apk update && apk add mosquitto-client-nossl
    ```
    (`jsonfilter` and `ubus` are already part of the base system.)
+
+   If you're building your own image (imagebuilder or Attended SysUpgrade
+   with advanced mode), you can bake `mosquitto-client-nossl` into the image
+   directly instead of installing it at runtime — one less write to the
+   overlay on a device where every KB counts.
 
 2. Install the executable to `/usr/bin` (executables belong here, not in
    `/etc/config`), and copy the settings file into `/etc/config`. Start from
@@ -230,7 +242,7 @@ your automations on `person.<name>` instead of the individual trackers.
 
 ### Adding a new AP later
 
-1. Install `mosquitto-client` and the service on the new router (same steps as
+1. Install `mosquitto-client-nossl` and the service on the new router (same steps as
    [Installation](#installation)).
 2. Use a settings file identical to your other APs but with a new `ap_name`.
 3. Start the service; a new tracker entity for each phone appears under that
@@ -262,7 +274,7 @@ daemon.debug presence-detector[1234]: Publishing to homeassistant/device_tracker
 | | `presence-detector.sh` (shell) | `presence-detector.py` (Python) |
 |---|---|---|
 | Flash usage | ~100–200 KB (+ base tools) | ~5–10 MB (Python + deps) |
-| Dependencies | `mosquitto-client` | `python3-light`, `python3-paho-mqtt`, … |
+| Dependencies | `mosquitto-client-nossl` | `python3-light`, `python3-paho-mqtt`, … |
 | Realtime events | ✅ `ubus subscribe` | ✅ `ubus subscribe` |
 | MQTT auto-discovery | ✅ | ✅ |
 | HA online/offline recovery | ✅ | ✅ |
