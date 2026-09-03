@@ -338,19 +338,9 @@ class PresenceDetector(Thread):
             self.set_device_away(interface, client)
 
         if is_first_sync:
-            # On the very first sync there is no prior state to diff
-            # against (self._last_seen_clients started out as None), so the
-            # "away" set above is always empty by construction. Without this,
-            # a device that is not currently connected but was previously
-            # marked home via a RETAINED MQTT state message from an earlier
-            # run of this process stays stuck home in HA forever: nothing
-            # ever tells HA otherwise, because the device simply never sends
-            # a fresh disassoc event if it is already absent right now.
-            #
-            # We can't discover arbitrary previously-tracked MACs from ubus
-            # alone, but every MAC listed in params is a known, named device
-            # we can proactively check right now against the current online
-            # list.
+            # First-sync fix for #81: without this, a params-listed device
+            # that's currently offline but was previously marked home via a
+            # retained MQTT message stays stuck home forever.
             seen_macs = {client for _interface, client in seen_now}
             for device in self._settings.params:
                 if device in seen_macs or not self._should_handle_device(device):
