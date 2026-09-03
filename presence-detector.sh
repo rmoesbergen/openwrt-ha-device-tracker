@@ -337,6 +337,32 @@ do_full_sync() {
 				fi
 			fi
 		done
+	else
+		# First-ever sync (fresh install, reinstall, or firmware upgrade): we
+		# have no history to diff against, so the block above can't detect
+		# "was home, now gone". Without this, a device that was marked home
+		# via a RETAINED MQTT message from a previous install stays stuck at
+		# home forever, since nothing ever tells HA otherwise.
+		#
+		# We can't discover arbitrary previously-tracked MACs from the router
+		# alone, but every MAC listed in params is a known, named device we
+		# can proactively check right now: if it's not in today's online
+		# list, publish it away immediately instead of waiting for a
+		# disassoc event (or the retire that never comes because it never
+		# reassociates while we're watching).
+		local now_macs
+		now_macs=$(awk '{print $2}' "$seen_file" | sort -u)
+		jsonfilter -i "$CONFIG" -e '@.params' 2>/dev/null | \
+			grep -oE '"[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}"' | tr -d '"' | tr 'A-Z' 'a-z' | sort -u | \
+			while read -r mac; do
+				[ -z "$mac" ] && continue
+				if ! echo "$now_macs" | grep -qx "$mac"; then
+					if should_handle_device "$mac"; then
+						ha_seen "$mac" 0
+						log "Device $mac is away (first sync, no prior state)" 1
+					fi
+				fi
+			done
 	fi
 
 	cp "$seen_file" "$LAST_SEEN"
