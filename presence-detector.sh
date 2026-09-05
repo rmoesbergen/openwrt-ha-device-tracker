@@ -174,6 +174,32 @@ is_pending_away() {
 }
 
 # ---------------------------------------------------------------------------
+# Interface lifecycle state (auto-detect only)
+# ---------------------------------------------------------------------------
+# A watched interface that stops existing (radio disabled, genuinely renamed/
+# renumbered rather than replaced) would otherwise retry `ubus subscribe`
+# forever at a quiet 15s backoff - harmless on its own, but once interface
+# auto-detection can ADD interfaces at runtime (see the periodic re-detect in
+# main()), leaving the removal half unhandled means $INTERFACES only ever
+# grows. watch_interface() marks itself gone here after enough consecutive
+# instant-exit attempts to be confident the interface isn't coming back
+# shortly, then exits its own loop; main()'s periodic re-detect prunes
+# $INTERFACES using this marker (auto-detect only - an explicit interfaces
+# list is never pruned, same as it's never auto-extended).
+
+mark_interface_gone() {
+	touch "$RUNDIR/iface_gone.$1" 2>/dev/null
+}
+
+is_interface_gone() {
+	[ -f "$RUNDIR/iface_gone.$1" ]
+}
+
+clear_interface_gone() {
+	rm -f "$RUNDIR/iface_gone.$1" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # Device filtering
 # ---------------------------------------------------------------------------
 
@@ -429,6 +455,11 @@ do_full_sync() {
 # Watch a single interface's ubus events and act on assoc/disassoc.
 watch_interface() {
 	local interface="$1"
+	# Consecutive instant-exit attempts (case 1 below). Reset whenever a
+	# subscription actually stays up for a while (case 2) - that proves the
+	# interface exists and is just having connectivity issues, which is not
+	# the "gone for good" signal this counter looks for.
+	local consecutive_quick_fails=0
 	while [ ! -f "$RUNDIR/.stop" ]; do
 		local start_ts
 		start_ts=$(date +%s 2>/dev/null || echo 0)
@@ -514,6 +545,7 @@ watch_interface() {
 		end_ts=$(date +%s 2>/dev/null || echo 0)
 		elapsed=$((end_ts - start_ts))
 		if [ "$elapsed" -ge 10 ]; then
+			consecutive_quick_fails=0
 			log "ubus subscribe $interface lost connection after ${elapsed}s; reconnecting and forcing a full sync to close any gap" 0
 			# force=1 bypasses the redundant-sync debounce, which would
 			# otherwise silently swallow exactly the sync we need if this
@@ -521,6 +553,20 @@ watch_interface() {
 			do_full_sync 1
 			sleep 5
 		else
+			consecutive_quick_fails=$((consecutive_quick_fails + 1))
+			# ~20 quick fails at a 15s backoff is ~5 minutes of never once
+			# managing to subscribe - long enough to rule out "still booting"
+			# or "hasn't finished a DFS CAC scan yet" and treat this as a
+			# genuinely gone interface (auto-detect only: an explicit
+			# interfaces list is the user's deliberate choice, so we keep
+			# retrying it forever exactly as before - only main()'s periodic
+			# re-detect logic acts on this marker, and it only prunes names
+			# that were auto-detected in the first place).
+			if [ "$AUTO_DETECT_INTERFACES" = "1" ] && [ "$consecutive_quick_fails" -ge 20 ]; then
+				log "ubus subscribe $interface has never connected after $consecutive_quick_fails attempts; giving up on this interface"
+				mark_interface_gone "$interface"
+				return 0
+			fi
 			log "ubus subscribe $interface exited immediately (interface not present?); retrying" 1
 			sleep 15
 		fi
@@ -626,6 +672,7 @@ main() {
 	# hard kill (kill -9 on the main process itself) bypasses cleanup(), so
 	# don't inherit a previous instance's now-meaningless PIDs/markers.
 	rm -f "$RUNDIR/.debounce_pids" "$RUNDIR"/*.pending_away 2>/dev/null
+	rm -f "$RUNDIR"/iface_gone.* 2>/dev/null
 	reset_registrations
 	trap cleanup TERM INT
 
@@ -685,6 +732,26 @@ main() {
 			if [ "$iface_recheck_elapsed" -ge 30 ]; then
 				iface_recheck_elapsed=0
 				[ -f "$RUNDIR/.stop" ] && break
+
+				# Prune interfaces watch_interface() has given up on (see
+				# mark_interface_gone - after enough consecutive instant-
+				# exit ubus subscribe attempts to be confident it's not
+				# just still starting up). Its own watcher loop has already
+				# exited by the time this marker exists, so nothing to kill
+				# here - just stop tracking the name and clear the marker,
+				# so if it ever comes back under the same name it's treated
+				# as freshly new rather than permanently ignored.
+				local remaining="" existing
+				for existing in $INTERFACES; do
+					if is_interface_gone "$existing"; then
+						log "Interface $existing confirmed gone; no longer tracking it"
+						clear_interface_gone "$existing"
+					else
+						remaining="$remaining $existing"
+					fi
+				done
+				INTERFACES="$remaining"
+
 				local current_ifaces new_iface already_watched
 				current_ifaces=$(ubus list 'hostapd.*' 2>/dev/null)
 				for new_iface in $current_ifaces; do
