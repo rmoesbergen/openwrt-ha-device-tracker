@@ -45,7 +45,20 @@ The behavior mirrors the Python version:
 * On start it performs a **full sync** via `ubus call <iface> get_clients` and
   publishes `home` for every connected client.
 * It runs one **`ubus subscribe <iface>`** watcher per Wi-Fi interface and
-  reacts to `assoc` (join) and `disassoc` (leave) events in realtime.
+  reacts to `assoc` (join) and `disassoc` (leave) events in realtime. When
+  `interfaces` is left empty (auto-detect), it also re-checks every 30s for
+  radios that weren't up yet at startup (DFS CAC delay, slow boot, a wifi
+  reload, or a renamed/renumbered interface after a channel switch or
+  firmware upgrade) and starts a watcher for each one it finds — a radio
+  that only appears after startup is otherwise never watched for the life
+  of the process. The reverse case is handled too: if an auto-detected
+  interface's watcher never manages to subscribe after ~5 minutes of
+  retrying (genuinely removed, not just slow to appear), it gives up and
+  stops tracking that name, so a renamed/renumbered radio doesn't leave a
+  watcher retrying forever, and the same name is treated as fresh if it
+  ever reappears. Doesn't apply when `interfaces` is set explicitly — an
+  explicit list is a deliberate choice, so it's never auto-extended or
+  auto-pruned.
 * It subscribes to **`homeassistant/status`** and performs a full re-sync when
   Home Assistant comes back online, and clears its registration cache when HA
   goes offline (so devices get re-announced via MQTT discovery).
