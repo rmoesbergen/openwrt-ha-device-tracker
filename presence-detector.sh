@@ -71,10 +71,15 @@ load_settings() {
 	# Filter list, lowercased
 	FILTER=$(get_array '@.filter' | tr 'A-Z' 'a-z')
 
-	# Interfaces: auto-detect if not specified
+	# Interfaces: auto-detect if not specified. AUTO_DETECT_INTERFACES gates
+	# the periodic re-detection in main() below - only relevant when the
+	# user didn't pin an explicit list themselves.
 	INTERFACES=$(get_array '@.interfaces')
 	if [ -z "$INTERFACES" ]; then
+		AUTO_DETECT_INTERFACES=1
 		INTERFACES=$(ubus list 'hostapd.*' 2>/dev/null)
+	else
+		AUTO_DETECT_INTERFACES=0
 	fi
 
 	if [ -z "$INTERFACES" ]; then
@@ -656,6 +661,7 @@ main() {
 	# depending on a SIGTERM trap interrupting a long `sleep` (unreliable on
 	# busybox ash), and well within procd's term_timeout.
 	local elapsed=0
+	local iface_recheck_elapsed=0
 	while [ ! -f "$RUNDIR/.stop" ]; do
 		sleep 2
 		if [ "$FALLBACK_SYNC_INTERVAL" -gt 0 ] 2>/dev/null; then
@@ -664,6 +670,42 @@ main() {
 				elapsed=0
 				[ -f "$RUNDIR/.stop" ] && break
 				do_full_sync
+			fi
+		fi
+
+		# Interface auto-detection only runs once at startup (load_settings),
+		# so a radio that appears afterward - still doing a DFS CAC scan,
+		# slow to come up on boot, recreated by a wifi reload, or renamed by
+		# a channel switch/firmware upgrade - would otherwise never get a
+		# watcher for the life of this process (see upstream issue #90).
+		# Only applies when auto-detecting; an explicit `interfaces` list is
+		# a deliberate choice we don't second-guess.
+		if [ "$AUTO_DETECT_INTERFACES" = "1" ]; then
+			iface_recheck_elapsed=$((iface_recheck_elapsed + 2))
+			if [ "$iface_recheck_elapsed" -ge 30 ]; then
+				iface_recheck_elapsed=0
+				[ -f "$RUNDIR/.stop" ] && break
+				local current_ifaces new_iface already_watched
+				current_ifaces=$(ubus list 'hostapd.*' 2>/dev/null)
+				for new_iface in $current_ifaces; do
+					already_watched=0
+					for existing in $INTERFACES; do
+						[ "$existing" = "$new_iface" ] && already_watched=1 && break
+					done
+					if [ "$already_watched" = "0" ]; then
+						log "New wifi interface detected: $new_iface; starting a watcher for it"
+						INTERFACES="$INTERFACES $new_iface"
+						watch_interface "$new_iface" &
+						CHILD_PIDS="$CHILD_PIDS $!"
+						# A newly-appeared interface may already have
+						# clients associated from before we started
+						# watching it (e.g. it came up moments ago and a
+						# phone already joined) - do_full_sync will pick
+						# them up on its own next run via
+						# get_all_online_devices, so nothing else to do
+						# here.
+					fi
+				done
 			fi
 		fi
 	done
