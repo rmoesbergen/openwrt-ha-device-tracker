@@ -33,11 +33,15 @@ log() {
 # Usage: get_setting <json-path> <default>
 get_setting() {
 	local value
-	value=$(jsonfilter -i "$CONFIG" -e "$1" 2>/dev/null)
-	if [ -z "$value" ]; then
-		echo "$2"
-	else
+	# jsonfilter exits 0 with empty output for a key that's PRESENT but set
+	# to an empty string, and exits nonzero for a key that's genuinely
+	# ABSENT - check the exit code, not just whether $value is empty, or an
+	# explicit "" override (e.g. mqtt_username: "" for a no-auth broker)
+	# gets silently replaced by the default instead of honored (issue #92).
+	if value=$(jsonfilter -i "$CONFIG" -e "$1" 2>/dev/null); then
 		echo "$value"
+	else
+		echo "$2"
 	fi
 }
 
@@ -111,13 +115,22 @@ mqtt_pub() {
 	local retain_flag=""
 	[ "$3" = "1" ] && retain_flag="-r"
 
-	local auth=""
-	[ -n "$MQTT_USERNAME" ] && auth="-u $MQTT_USERNAME -P $MQTT_PASSWORD"
+	# Build the argv with `set --` rather than an unquoted $auth string: an
+	# empty MQTT_PASSWORD (no-auth broker with a username, or vice versa)
+	# would otherwise vanish entirely during word-splitting instead of
+	# staying a distinct (empty) argument, shifting -P's value onto the
+	# next real flag (see issue #92 - this is what actually crashed
+	# mosquitto_pub, on top of the get_setting default-masking bug).
+	set -- -h "$MQTT_HOST" -p "$MQTT_PORT"
+	if [ -n "$MQTT_USERNAME" ]; then
+		set -- "$@" -u "$MQTT_USERNAME" -P "$MQTT_PASSWORD"
+	fi
+	set -- "$@" -q 1
+	[ -n "$retain_flag" ] && set -- "$@" "$retain_flag"
+	set -- "$@" -t "$topic" -m "$payload"
 
 	log "Publishing to $topic: $payload" 1
-	# shellcheck disable=SC2086
-	mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" $auth \
-		-q 1 $retain_flag -t "$topic" -m "$payload"
+	mosquitto_pub "$@"
 	return $?
 }
 
@@ -575,12 +588,17 @@ watch_interface() {
 
 # Watch Home Assistant status topic to re-sync when HA comes back online.
 watch_ha_status() {
-	local auth=""
-	[ -n "$MQTT_USERNAME" ] && auth="-u $MQTT_USERNAME -P $MQTT_PASSWORD"
 	while [ ! -f "$RUNDIR/.stop" ]; do
-		# shellcheck disable=SC2086
-		mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" $auth \
-			-t "homeassistant/status" 2>/dev/null | while read -r payload; do
+		# Same argv-building fix as mqtt_pub: `set --` instead of an
+		# unquoted $auth string, so an empty MQTT_PASSWORD stays a distinct
+		# (empty) argument instead of vanishing during word-splitting and
+		# shifting -P's value onto the next flag.
+		set -- -h "$MQTT_HOST" -p "$MQTT_PORT"
+		if [ -n "$MQTT_USERNAME" ]; then
+			set -- "$@" -u "$MQTT_USERNAME" -P "$MQTT_PASSWORD"
+		fi
+		set -- "$@" -t "homeassistant/status"
+		mosquitto_sub "$@" 2>/dev/null | while read -r payload; do
 			[ -f "$RUNDIR/.stop" ] && break
 			case "$payload" in
 			offline)
