@@ -71,12 +71,33 @@ class Settings:
         }
         if not self._settings["interfaces"]:
             self._settings["interfaces"] = self.list_wifi_interfaces()
+            self._auto_detect_interfaces = True
+        else:
+            self._auto_detect_interfaces = False
+
+    @property
+    def auto_detect_interfaces(self) -> bool:
+        """Whether interfaces were auto-detected (vs an explicit user-supplied list)"""
+        return self._auto_detect_interfaces
 
     def __getattr__(self, item: str) -> Any:
         return self._settings.get(item)
 
     def list_wifi_interfaces(self) -> list[str]:
-        """List all wifi interfaces"""
+        """List all wifi interfaces. Returns [] (rather than raising) on
+        failure, so a caller doing periodic re-detection at runtime doesn't
+        crash the whole process over a transient ubus hiccup."""
+        try:
+            output = subprocess.run(
+                ["ubus", "list", "hostapd.*"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, OSError):
+            return []
+        interfaces = output.stdout.decode("utf-8").strip().split("\n")
+        return [i for i in interfaces if i]
         output = subprocess.run(
             ["ubus", "list", "hostapd.*"], stdout=subprocess.PIPE, check=True
         )
@@ -310,6 +331,51 @@ class PresenceDetector(Thread):
         for watcher in self._watchers:
             watcher.stop()
 
+    def _recheck_interfaces(self) -> None:
+        """Detect radios that appeared or disappeared after startup and
+        start/stop watchers accordingly (see #90). Interface auto-detection
+        (self._settings.interfaces resolved from `ubus list 'hostapd.*'`)
+        only happens once, in Settings.__init__ - a radio still doing a DFS
+        CAC scan, slow to come up on boot, recreated by a wifi reload, or
+        renamed/renumbered by a channel switch or firmware upgrade is
+        otherwise never watched for the life of the process, and
+        set_device_away's "still connected on another watched interface"
+        check can't see a device on an interface nothing ever added to
+        self._settings.interfaces either - producing a false away exactly
+        as reported. Only applies when auto-detecting; an explicit
+        interfaces list is a deliberate choice we don't second-guess."""
+        if not self._settings.auto_detect_interfaces:
+            return
+
+        # Prune watchers that gave up (see UbusWatcher.gave_up) - their own
+        # thread has already exited, so nothing to stop here, just drop the
+        # bookkeeping so the same name is treated as fresh if it reappears.
+        gone = [w for w in self._watchers if w.gave_up]
+        for watcher in gone:
+            self._logger.log(
+                f"Interface {watcher.interface} confirmed gone; no longer tracking it"
+            )
+            self._watchers.remove(watcher)
+            if watcher.interface in self._settings.interfaces:
+                self._settings.interfaces.remove(watcher.interface)
+            self._online_clients.pop(watcher.interface, None)
+
+        current = set(self._settings.list_wifi_interfaces())
+        watched = {w.interface for w in self._watchers}
+        for interface in current - watched:
+            self._logger.log(
+                f"New wifi interface detected: {interface}; starting a watcher for it"
+            )
+            self._settings.interfaces.append(interface)
+            self._online_clients[interface] = set()
+            watcher = UbusWatcher(interface, self.set_device_home, self.set_device_away)
+            watcher.start()
+            self._watchers.append(watcher)
+            # A newly-appeared interface may already have clients associated
+            # from before we started watching it - the next full sync picks
+            # them up on its own via _get_all_online_devices, nothing else
+            # to do here.
+
     @property
     def stopped(self):
         """Should this Thread be stopped?"""
@@ -355,6 +421,12 @@ class PresenceDetector(Thread):
                 # definition isn't the case here.
                 self._ha_seen(device, seen=False)
 
+    # How often to re-check for newly-appeared or gone wifi interfaces when
+    # auto-detecting (see _recheck_interfaces). Independent of
+    # fallback_sync_interval, which can be 0/disabled and is semantically
+    # about "full state sync", not "interface discovery".
+    INTERFACE_RECHECK_INTERVAL = 30
+
     def run(self) -> None:
         """Main loop for the presence detector"""
         self._do_full_sync()
@@ -363,20 +435,51 @@ class PresenceDetector(Thread):
         self.start_watchers()
 
         mq_is_offline = False
-        # Enable a queue timeout if fallback_sync interval is set
-        queue_timeout = (
-            self._settings.fallback_sync_interval
-            if self._settings.fallback_sync_interval > 0
-            else None
-        )
+        fallback_sync_interval = self._settings.fallback_sync_interval
+        auto_detect = self._settings.auto_detect_interfaces
+
+        # The queue timeout drives both periodic full syncs and, when
+        # auto-detecting, the interface recheck - use whichever period is
+        # shorter (or don't time out at all if neither applies) as the
+        # actual wait, and track each cadence's own elapsed time against
+        # ticks of that duration so a short interface-recheck period
+        # doesn't silently make full syncs happen more often than
+        # configured, or vice versa.
+        if auto_detect and fallback_sync_interval > 0:
+            queue_timeout = min(
+                fallback_sync_interval, self.INTERFACE_RECHECK_INTERVAL
+            )
+        elif auto_detect:
+            queue_timeout = self.INTERFACE_RECHECK_INTERVAL
+        elif fallback_sync_interval > 0:
+            queue_timeout = fallback_sync_interval
+        else:
+            queue_timeout = None
+        elapsed_since_full_sync = 0.0
+        elapsed_since_iface_recheck = 0.0
 
         # The main (sync) polling loop
         while not self._killed:
             try:
                 item: QueueItem = self._queue.get(timeout=queue_timeout)
             except queue.Empty:
-                # Perform a periodic full sync
-                self._do_full_sync()
+                # queue_timeout is None whenever neither cadence applies, so
+                # this branch (and the elapsed-time bookkeeping below) is
+                # only ever reached when at least one of them is active.
+                elapsed_since_full_sync += queue_timeout
+                elapsed_since_iface_recheck += queue_timeout
+                if (
+                    fallback_sync_interval > 0
+                    and elapsed_since_full_sync >= fallback_sync_interval
+                ):
+                    elapsed_since_full_sync = 0.0
+                    self._do_full_sync()
+                if (
+                    auto_detect
+                    and elapsed_since_iface_recheck >= self.INTERFACE_RECHECK_INTERVAL
+                ):
+                    elapsed_since_iface_recheck = 0.0
+                    self._recheck_interfaces()
                 continue
 
             if item.action == QueueItem.Action.QUIT:
@@ -402,6 +505,14 @@ class PresenceDetector(Thread):
 class UbusWatcher(Thread):
     """Watches live ubus events and signals presence detector of leave/join events"""
 
+    # Consecutive failed-to-start attempts (~1s apart, see the sleep below)
+    # before giving up on an interface that never manages to subscribe -
+    # long enough to rule out "still booting" / "hasn't finished a DFS CAC
+    # scan yet", short enough not to sit blind for too long on a genuinely
+    # renamed/removed interface. Mirrors the shell rewrite's equivalent
+    # threshold (used there for the same purpose).
+    GIVE_UP_AFTER_ATTEMPTS = 300
+
     def __init__(
         self,
         interface: str,
@@ -413,13 +524,28 @@ class UbusWatcher(Thread):
         self._on_leave = on_leave
         self._interface = interface
         self._killed = False
+        self._gave_up = False
 
     def stop(self):
         """Stops this watcher thread"""
         self._killed = True
 
+    @property
+    def interface(self) -> str:
+        """The interface this watcher is (or was) watching"""
+        return self._interface
+
+    @property
+    def gave_up(self) -> bool:
+        """True once this watcher has given up on ever subscribing to its
+        interface (see GIVE_UP_AFTER_ATTEMPTS) and stopped its own loop -
+        the caller should stop tracking this interface, and treat the same
+        name reappearing later as brand new rather than permanently ignored."""
+        return self._gave_up
+
     def run(self) -> None:
         """Main loop for the ubus event watcher thread"""
+        consecutive_failures = 0
         while not self._killed:
             # pylint: disable=consider-using-with
             ubus = subprocess.Popen(
@@ -434,7 +560,15 @@ class UbusWatcher(Thread):
             if return_code is not None or ubus.stdout is None:
                 # Starting ubus failed -> interface does not exist (yet)? let's retry later
                 ubus.wait()
+                consecutive_failures += 1
+                if consecutive_failures >= self.GIVE_UP_AFTER_ATTEMPTS:
+                    self._gave_up = True
+                    return
                 continue
+            # A subscription that actually starts proves the interface
+            # exists - reset the counter so a later, unrelated drop doesn't
+            # inherit an already-high failure count.
+            consecutive_failures = 0
             # Startup OK, start reading stdout
             while not self._killed:
                 line = ubus.stdout.readline()
