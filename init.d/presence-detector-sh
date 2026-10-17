@@ -6,7 +6,54 @@ USE_PROCD=1
 NAME=presence-detector
 PROG=/usr/bin/presence-detector.sh
 
+HOTPLUG_HOOK=/etc/hotplug.d/net/30-presence-detector
+
+# Install a hotplug hook that restarts us when a Wi-Fi AP interface appears
+# or disappears. presence-detector enumerates hostapd.* interfaces once at
+# startup, so a radio that comes up late (DFS CAC, slow boot, wifi reload,
+# DFS channel switch, a newly added SSID) would otherwise never be watched -
+# and one that goes away would leave a watcher retrying a dead interface.
+# See upstream issues #90 and #97. Installing this from the init script
+# keeps the user-facing install unchanged (enabling the service wires it up;
+# disabling tears it down).
+install_hotplug_hook() {
+	mkdir -p /etc/hotplug.d/net 2>/dev/null
+	cat > "$HOTPLUG_HOOK" <<'HOOK'
+#!/bin/sh
+# Managed by /etc/init.d/presence-detector - do not edit by hand.
+# Restart presence-detector when a Wi-Fi AP interface (phy*-ap*) is added or
+# removed, so its one-shot startup interface detection stays current.
+case "$DEVICENAME" in
+	phy*-ap*) ;;
+	*) return 0 ;;
+esac
+[ "$ACTION" = "add" ] || [ "$ACTION" = "remove" ] || return 0
+[ -x /etc/init.d/presence-detector ] || return 0
+/etc/init.d/presence-detector enabled || return 0
+PENDING=/var/run/presence-detector.hotplug_pending
+mkdir -p /var/run 2>/dev/null
+# Coalesce a burst (a wifi down/up fires remove+add for every AP interface
+# within a few seconds) into a single restart: the last event in the settle
+# window wins, earlier ones bail when they see a newer marker.
+stamp=$(date +%s%N 2>/dev/null || date +%s)
+echo "$stamp" > "$PENDING"
+(
+	sleep 5
+	[ "$(cat "$PENDING" 2>/dev/null)" = "$stamp" ] || exit 0
+	rm -f "$PENDING" 2>/dev/null
+	logger -t presence-detector "AP interface change ($ACTION $DEVICENAME); restarting to refresh watched interfaces"
+	/etc/init.d/presence-detector restart
+) &
+HOOK
+	chmod +x "$HOOK" 2>/dev/null
+}
+
+remove_hotplug_hook() {
+	rm -f "$HOTPLUG_HOOK" 2>/dev/null
+}
+
 start_service() {
+	install_hotplug_hook
 	procd_open_instance
 	procd_set_param command "$PROG"
 	procd_set_param stdout 1
@@ -22,6 +69,10 @@ start_service() {
 # missed). This reap runs after procd signals the main process and removes
 # any stragglers by pattern so nothing leaks across restarts.
 stop_service() {
+	# Note: a hotplug-triggered `restart` calls stop then start; the hook is
+	# reinstalled by start_service, so removing it here is only a real
+	# teardown on an actual stop/disable.
+	remove_hotplug_hook
 	# Signal the script to stop (its watcher/main loops poll this flag).
 	touch /var/run/presence-detector/.stop 2>/dev/null
 	# Reap any leftover watcher grandchildren. busybox has pgrep, not pkill.

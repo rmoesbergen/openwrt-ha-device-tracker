@@ -75,15 +75,14 @@ load_settings() {
 	# Filter list, lowercased
 	FILTER=$(get_array '@.filter' | tr 'A-Z' 'a-z')
 
-	# Interfaces: auto-detect if not specified. AUTO_DETECT_INTERFACES gates
-	# the periodic re-detection in main() below - only relevant when the
-	# user didn't pin an explicit list themselves.
+	# Interfaces: auto-detect if not specified. A hotplug hook
+	# (/etc/hotplug.d/net, installed by the init script) restarts the
+	# service when an AP interface appears or disappears, so this one-shot
+	# detection at startup always reflects the current set - no in-process
+	# re-scanning needed.
 	INTERFACES=$(get_array '@.interfaces')
 	if [ -z "$INTERFACES" ]; then
-		AUTO_DETECT_INTERFACES=1
 		INTERFACES=$(ubus list 'hostapd.*' 2>/dev/null)
-	else
-		AUTO_DETECT_INTERFACES=0
 	fi
 
 	if [ -z "$INTERFACES" ]; then
@@ -184,32 +183,6 @@ clear_pending_away() {
 
 is_pending_away() {
 	[ -f "$RUNDIR/$1.pending_away" ]
-}
-
-# ---------------------------------------------------------------------------
-# Interface lifecycle state (auto-detect only)
-# ---------------------------------------------------------------------------
-# A watched interface that stops existing (radio disabled, genuinely renamed/
-# renumbered rather than replaced) would otherwise retry `ubus subscribe`
-# forever at a quiet 15s backoff - harmless on its own, but once interface
-# auto-detection can ADD interfaces at runtime (see the periodic re-detect in
-# main()), leaving the removal half unhandled means $INTERFACES only ever
-# grows. watch_interface() marks itself gone here after enough consecutive
-# instant-exit attempts to be confident the interface isn't coming back
-# shortly, then exits its own loop; main()'s periodic re-detect prunes
-# $INTERFACES using this marker (auto-detect only - an explicit interfaces
-# list is never pruned, same as it's never auto-extended).
-
-mark_interface_gone() {
-	touch "$RUNDIR/iface_gone.$1" 2>/dev/null
-}
-
-is_interface_gone() {
-	[ -f "$RUNDIR/iface_gone.$1" ]
-}
-
-clear_interface_gone() {
-	rm -f "$RUNDIR/iface_gone.$1" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -569,15 +542,13 @@ watch_interface() {
 			consecutive_quick_fails=$((consecutive_quick_fails + 1))
 			# ~20 quick fails at a 15s backoff is ~5 minutes of never once
 			# managing to subscribe - long enough to rule out "still booting"
-			# or "hasn't finished a DFS CAC scan yet" and treat this as a
-			# genuinely gone interface (auto-detect only: an explicit
-			# interfaces list is the user's deliberate choice, so we keep
-			# retrying it forever exactly as before - only main()'s periodic
-			# re-detect logic acts on this marker, and it only prunes names
-			# that were auto-detected in the first place).
-			if [ "$AUTO_DETECT_INTERFACES" = "1" ] && [ "$consecutive_quick_fails" -ge 20 ]; then
+			# or "hasn't finished a DFS CAC scan yet" and treat this
+			# interface as genuinely gone. Stop this watcher rather than
+			# spin forever; if the interface comes back, the hotplug hook
+			# (/etc/hotplug.d/net) restarts the whole service and a fresh
+			# watcher is started for it then.
+			if [ "$consecutive_quick_fails" -ge 20 ]; then
 				log "ubus subscribe $interface has never connected after $consecutive_quick_fails attempts; giving up on this interface"
-				mark_interface_gone "$interface"
 				return 0
 			fi
 			log "ubus subscribe $interface exited immediately (interface not present?); retrying" 1
@@ -690,7 +661,6 @@ main() {
 	# hard kill (kill -9 on the main process itself) bypasses cleanup(), so
 	# don't inherit a previous instance's now-meaningless PIDs/markers.
 	rm -f "$RUNDIR/.debounce_pids" "$RUNDIR"/*.pending_away 2>/dev/null
-	rm -f "$RUNDIR"/iface_gone.* 2>/dev/null
 	reset_registrations
 	trap cleanup TERM INT
 
@@ -726,7 +696,6 @@ main() {
 	# depending on a SIGTERM trap interrupting a long `sleep` (unreliable on
 	# busybox ash), and well within procd's term_timeout.
 	local elapsed=0
-	local iface_recheck_elapsed=0
 	while [ ! -f "$RUNDIR/.stop" ]; do
 		sleep 2
 		if [ "$FALLBACK_SYNC_INTERVAL" -gt 0 ] 2>/dev/null; then
@@ -735,62 +704,6 @@ main() {
 				elapsed=0
 				[ -f "$RUNDIR/.stop" ] && break
 				do_full_sync
-			fi
-		fi
-
-		# Interface auto-detection only runs once at startup (load_settings),
-		# so a radio that appears afterward - still doing a DFS CAC scan,
-		# slow to come up on boot, recreated by a wifi reload, or renamed by
-		# a channel switch/firmware upgrade - would otherwise never get a
-		# watcher for the life of this process (see upstream issue #90).
-		# Only applies when auto-detecting; an explicit `interfaces` list is
-		# a deliberate choice we don't second-guess.
-		if [ "$AUTO_DETECT_INTERFACES" = "1" ]; then
-			iface_recheck_elapsed=$((iface_recheck_elapsed + 2))
-			if [ "$iface_recheck_elapsed" -ge 30 ]; then
-				iface_recheck_elapsed=0
-				[ -f "$RUNDIR/.stop" ] && break
-
-				# Prune interfaces watch_interface() has given up on (see
-				# mark_interface_gone - after enough consecutive instant-
-				# exit ubus subscribe attempts to be confident it's not
-				# just still starting up). Its own watcher loop has already
-				# exited by the time this marker exists, so nothing to kill
-				# here - just stop tracking the name and clear the marker,
-				# so if it ever comes back under the same name it's treated
-				# as freshly new rather than permanently ignored.
-				local remaining="" existing
-				for existing in $INTERFACES; do
-					if is_interface_gone "$existing"; then
-						log "Interface $existing confirmed gone; no longer tracking it"
-						clear_interface_gone "$existing"
-					else
-						remaining="$remaining $existing"
-					fi
-				done
-				INTERFACES="$remaining"
-
-				local current_ifaces new_iface already_watched
-				current_ifaces=$(ubus list 'hostapd.*' 2>/dev/null)
-				for new_iface in $current_ifaces; do
-					already_watched=0
-					for existing in $INTERFACES; do
-						[ "$existing" = "$new_iface" ] && already_watched=1 && break
-					done
-					if [ "$already_watched" = "0" ]; then
-						log "New wifi interface detected: $new_iface; starting a watcher for it"
-						INTERFACES="$INTERFACES $new_iface"
-						watch_interface "$new_iface" &
-						CHILD_PIDS="$CHILD_PIDS $!"
-						# A newly-appeared interface may already have
-						# clients associated from before we started
-						# watching it (e.g. it came up moments ago and a
-						# phone already joined) - do_full_sync will pick
-						# them up on its own next run via
-						# get_all_online_devices, so nothing else to do
-						# here.
-					fi
-				done
 			fi
 		fi
 	done
