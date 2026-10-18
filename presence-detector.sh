@@ -416,11 +416,32 @@ do_full_sync() {
 		fi
 	done < "$seen_file"
 
-	# Any MAC in last_seen but no longer online is now away.
+	# Away detection has two complementary parts, and BOTH run on every sync
+	# (not just the first):
+	#
+	#  1. Diff against LAST_SEEN: any MAC we saw online last time but isn't
+	#     online now is away. This catches arbitrary devices - including ones
+	#     not listed in params - but only if we actually observed them here
+	#     before (they made it into a prior snapshot).
+	#
+	#  2. Proactively check every params-listed MAC: if a known, named device
+	#     isn't online right now, publish it away. This is the ONLY thing that
+	#     catches a device that silently disappeared without ever emitting a
+	#     disassoc (common on iOS) AND was never in LAST_SEEN to diff against -
+	#     e.g. it dropped off before the last service restart cleared the
+	#     snapshot, or only ever connected to a different AP. Without this, a
+	#     stale RETAINED "home" state for such a device sits in HA forever,
+	#     since nothing ever tells HA otherwise (see the celu-de-cecilia
+	#     incident; same class as upstream #51 / #84).
+	#
+	# ha_seen "$mac" 0 publishes a retained "not_home" and is idempotent, so a
+	# MAC caught by both parts just gets the same message twice - harmless.
+	local now_macs
+	now_macs=$(awk '{print $2}' "$seen_file" | sort -u)
+
+	# Part 1: LAST_SEEN diff (only possible once we have history).
 	if [ -f "$LAST_SEEN" ]; then
 		# Compare on the MAC column only (a device may roam interfaces).
-		local now_macs
-		now_macs=$(awk '{print $2}' "$seen_file" | sort -u)
 		awk '{print $2}' "$LAST_SEEN" | sort -u | while read -r mac; do
 			[ -z "$mac" ] && continue
 			if ! echo "$now_macs" | grep -qx "$mac"; then
@@ -430,33 +451,20 @@ do_full_sync() {
 				fi
 			fi
 		done
-	else
-		# First-ever sync (fresh install, reinstall, or firmware upgrade): we
-		# have no history to diff against, so the block above can't detect
-		# "was home, now gone". Without this, a device that was marked home
-		# via a RETAINED MQTT message from a previous install stays stuck at
-		# home forever, since nothing ever tells HA otherwise.
-		#
-		# We can't discover arbitrary previously-tracked MACs from the router
-		# alone, but every MAC listed in params is a known, named device we
-		# can proactively check right now: if it's not in today's online
-		# list, publish it away immediately instead of waiting for a
-		# disassoc event (or the retire that never comes because it never
-		# reassociates while we're watching).
-		local now_macs
-		now_macs=$(awk '{print $2}' "$seen_file" | sort -u)
-		jsonfilter -i "$CONFIG" -e '@.params' 2>/dev/null | \
-			grep -oE '"[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}"' | tr -d '"' | tr 'A-Z' 'a-z' | sort -u | \
-			while read -r mac; do
-				[ -z "$mac" ] && continue
-				if ! echo "$now_macs" | grep -qx "$mac"; then
-					if should_handle_device "$mac"; then
-						ha_seen "$mac" 0
-						log "Device $mac is away (first sync, no prior state)" 1
-					fi
-				fi
-			done
 	fi
+
+	# Part 2: every params-listed MAC that isn't online right now.
+	jsonfilter -i "$CONFIG" -e '@.params' 2>/dev/null | \
+		grep -oE '"[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}"' | tr -d '"' | tr 'A-Z' 'a-z' | sort -u | \
+		while read -r mac; do
+			[ -z "$mac" ] && continue
+			if ! echo "$now_macs" | grep -qx "$mac"; then
+				if should_handle_device "$mac"; then
+					ha_seen "$mac" 0
+					log "Device $mac is away (params-listed, not currently online)" 1
+				fi
+			fi
+		done
 
 	cp "$seen_file" "$LAST_SEEN"
 }
