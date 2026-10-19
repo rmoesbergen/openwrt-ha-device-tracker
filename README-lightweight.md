@@ -79,6 +79,42 @@ so the asynchronous watchers and the main loop share state without threads.
 
 ## Installation
 
+### Option A: package feed (recommended)
+
+If you'd rather not copy files by hand, install from the project's package
+feed. It ships two packages — `presence-detector` (Python) and
+`presence-detector-sh` (this shell version) — both `all`-architecture, so
+one feed works on every target. They conflict (both install the same
+`/etc/init.d/presence-detector` and settings path), so install whichever one
+you want.
+
+Add the feed (replace the URL with the one published for your
+package-manager generation — see the feed's index page), then install:
+
+```bash
+# opkg (OpenWrt <= 24.10):
+echo "src/gz presence_detector https://<feed-url>/ipk" >> /etc/opkg/customfeeds.conf
+opkg update
+opkg install presence-detector-sh        # or: presence-detector (Python)
+
+# apk (OpenWrt snapshot / 25.12+):
+# add the feed to /etc/apk/repositories.d/ then:
+apk update
+apk add presence-detector-sh
+```
+
+The feed is currently **unsigned**, so opkg needs
+`--no-check-signature` (or set `option check_signature` off for the feed)
+and apk needs `--allow-untrusted`, until a signing key is configured.
+
+Installing the package pulls in the dependency (`mosquitto-client-nossl`),
+drops the script in `/usr/bin`, installs the init script, and places a
+starter `presence-detector.settings.json` in `/etc/config` (preserved on
+upgrade). Then edit the settings and `service presence-detector enable &&
+service presence-detector start`.
+
+### Option B: manual install
+
 On your OpenWRT device:
 
 1. Install the only extra dependency. Use the **`-nossl`** variant explicitly

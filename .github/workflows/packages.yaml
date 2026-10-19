@@ -1,0 +1,107 @@
+name: Build package feed
+
+# Builds the presence-detector OpenWrt packages and publishes a custom
+# package feed (see issue #95, option 2). The packages are PKGARCH:=all
+# (pure scripts), so a single build per package-manager generation works on
+# every target arch - no per-arch matrix needed. We build one ipk feed
+# (23.05 stable, opkg) and one apk feed (snapshot, apk) so routers on either
+# generation can use the feed.
+#
+# The feed is published to GitHub Pages. Users add the printed feed URL to
+# opkg/apk and then `opkg install presence-detector[-sh]` / `apk add ...`.
+#
+# NOTE: the feed is currently UNSIGNED. To sign it, add a repository secret
+# with a usign/signify key (ipk: KEY_BUILD) and/or an apk private key
+# (PRIVATE_KEY), and pass them through to the build steps below. Unsigned
+# means users pass --no-check-signature (opkg) or -X / an allow-untrusted
+# flag (apk); documented in README.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }} feed
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ipk
+            arch: x86_64-23.05.5
+          - name: apk
+            arch: x86_64-SNAPSHOT
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build packages + index
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}
+          FEEDNAME: presence_detector
+          FEED_DIR: ${{ github.workspace }}/openwrt
+          PACKAGES: presence-detector presence-detector-sh
+          INDEX: '1'
+          V: s
+
+      - name: Collect feed artifacts
+        run: |
+          mkdir -p feed/${{ matrix.name }}
+          # bin/ layout differs slightly by generation; copy whatever package
+          # dirs the SDK produced (ipk under packages/, apk likewise) plus the
+          # generated index files.
+          find bin -type f \( -name '*.ipk' -o -name '*.apk' -o -name 'Packages*' -o -name 'index.json' -o -name 'packages.adb' -o -name '*.sig' \) \
+            -exec cp -v {} feed/${{ matrix.name }}/ \; || true
+          echo "=== collected ==="
+          ls -la feed/${{ matrix.name }}/
+
+      - name: Upload feed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feed-${{ matrix.name }}
+          path: feed/${{ matrix.name }}
+
+  publish:
+    name: Publish feed to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gather feeds
+        uses: actions/download-artifact@v4
+        with:
+          path: site
+      - name: Lay out site
+        run: |
+          mkdir -p public
+          # download-artifact nests under feed-<name>/; flatten to /<name>/
+          for d in site/feed-*; do
+            n="${d##*/feed-}"
+            mkdir -p "public/$n"
+            cp -r "$d"/. "public/$n"/
+          done
+          ls -R public
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    name: Deploy Pages
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
