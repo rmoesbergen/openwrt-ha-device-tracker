@@ -176,6 +176,7 @@ The program will run as a 'service' in the background and will log interesting e
 You can read these events by running 'logread' on your OpenWRT device, or using your favorite web-ui.
 
 In case something doesn't work, here are a some things you can do to check your setup:
+* Check the daemon is running: `service presence-detector status`
 * Check the OpenWRT logging with 'logread' and see if there are any error messages.
 * Double-check you have enabled the MQTT integration in HA and that it is connected to the correct broker.
 * Check connectivity to your MQTT broker from the router by running:
