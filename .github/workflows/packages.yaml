@@ -12,10 +12,11 @@ name: Build package feed
 # PKG_HASH), so the whole repository is mounted as the feed. PKG_VERSION is
 # stamped from the release tag below.
 #
-# NOTE: the feed is currently UNSIGNED. To sign it, add repository secrets
-# and pass them to the build step: KEY_BUILD (usign key, signs the ipk
-# feed) and/or PRIVATE_KEY (signs the apk feed). See README-lightweight.md
-# for what an unsigned feed means for users.
+# Signing: the feeds are signed with keys from base64-encoded repository
+# secrets - IPK_BUILD_PRIVATE_KEY/IPK_BUILD_PUBLIC_KEY (usign) and
+# APK_BUILD_PRIVATE_KEY/APK_BUILD_PUBLIC_KEY (EC, PEM). The public key is
+# published next to each feed for users to install. Without the secrets
+# (e.g. on a fork) an unsigned feed is built, with a warning.
 
 on:
   push:
@@ -58,6 +59,26 @@ jobs:
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" openwrt/presence-detector/Makefile
           grep '^PKG_VERSION' openwrt/presence-detector/Makefile
 
+      - name: Decode signing key
+        env:
+          PRIV_B64: ${{ matrix.name == 'ipk' && secrets.IPK_BUILD_PRIVATE_KEY || secrets.APK_BUILD_PRIVATE_KEY }}
+          PUB_B64: ${{ matrix.name == 'ipk' && secrets.IPK_BUILD_PUBLIC_KEY || secrets.APK_BUILD_PUBLIC_KEY }}
+          # gh-action-sdk reads the usign key from KEY_BUILD and the apk key
+          # from PRIVATE_KEY.
+          KEY_VAR: ${{ matrix.name == 'ipk' && 'KEY_BUILD' || 'PRIVATE_KEY' }}
+        run: |
+          if [ -z "$PRIV_B64" ] || [ -z "$PUB_B64" ]; then
+            echo "::warning::No signing key secrets - building an UNSIGNED ${{ matrix.name }} feed"
+            exit 0
+          fi
+          KEY=$(echo "$PRIV_B64" | base64 -d)
+          # The secret is masked in logs only in its base64 form.
+          echo "$KEY" | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done
+          { echo "$KEY_VAR<<EOF_KEY"; echo "$KEY"; echo "EOF_KEY"; } >> "$GITHUB_ENV"
+          echo "$PUB_B64" | base64 -d > "$RUNNER_TEMP/public-key"
+
       - name: Build packages + index
         uses: openwrt/gh-action-sdk@main
         env:
@@ -78,6 +99,11 @@ jobs:
           mkdir -p feed/${{ matrix.name }}
           cp -v "$SRC"/* feed/${{ matrix.name }}/
           ls feed/${{ matrix.name }}/*.${{ matrix.name }} >/dev/null || { echo "No .${{ matrix.name }} packages built"; exit 1; }
+          # Public key for users: usign key for opkg, PEM for apk.
+          if [ -f "$RUNNER_TEMP/public-key" ]; then
+            EXT=${{ matrix.name == 'ipk' && 'pub' || 'pem' }}
+            cp -v "$RUNNER_TEMP/public-key" "feed/${{ matrix.name }}/presence-detector.$EXT"
+          fi
 
       - name: Upload feed artifact
         uses: actions/upload-artifact@v4
