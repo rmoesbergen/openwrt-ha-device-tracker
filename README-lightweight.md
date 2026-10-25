@@ -79,39 +79,53 @@ so the asynchronous watchers and the main loop share state without threads.
 
 ## Installation
 
-### Option A: package feed (recommended)
+### Option A: package feed
 
-If you'd rather not copy files by hand, install from the project's package
-feed. It ships two packages — `presence-detector` (Python) and
-`presence-detector-sh` (this shell version) — both `all`-architecture, so
-one feed works on every target. They conflict (both install the same
-`/etc/init.d/presence-detector` and settings path), so install whichever one
-you want.
+Instead of copying files by hand, you can install from the project's
+package feed (published on every release). It ships two packages —
+`presence-detector` (Python) and `presence-detector-sh` (this shell
+version) — both architecture-independent, so one feed works on every
+target. Install one or the other: they conflict, since both provide
+`/etc/init.d/presence-detector` and the same settings file.
 
-Add the feed (replace the URL with the one published for your
-package-manager generation — see the feed's index page), then install:
+> **The feed is currently unsigned.** apk can use it with an extra flag;
+> opkg can't use it without disabling signature checks for *all* feeds —
+> see the notes below each section.
+
+**apk (OpenWrt 25.12 and newer):**
 
 ```bash
-# opkg (OpenWrt <= 24.10):
-echo "src/gz presence_detector https://<feed-url>/ipk" >> /etc/opkg/customfeeds.conf
-opkg update
-opkg install presence-detector-sh        # or: presence-detector (Python)
-
-# apk (OpenWrt snapshot / 25.12+):
-# add the feed to /etc/apk/repositories.d/ then:
-apk update
-apk add presence-detector-sh
+echo "https://rmoesbergen.github.io/openwrt-ha-device-tracker/apk/packages.adb" \
+  >> /etc/apk/repositories.d/customfeeds.list
+apk --allow-untrusted update
+apk --allow-untrusted add presence-detector-sh    # or: presence-detector (Python)
 ```
 
-The feed is currently **unsigned**, so opkg needs
-`--no-check-signature` (or set `option check_signature` off for the feed)
-and apk needs `--allow-untrusted`, until a signing key is configured.
+Because the feed is unsigned, apk ignores it (`UNTRUSTED signature`)
+unless you pass `--allow-untrusted` — including on later
+`apk --allow-untrusted upgrade` runs, if you want updates from it.
 
-Installing the package pulls in the dependency (`mosquitto-client-nossl`),
-drops the script in `/usr/bin`, installs the init script, and places a
-starter `presence-detector.settings.json` in `/etc/config` (preserved on
-upgrade). Then edit the settings and `service presence-detector enable &&
-service presence-detector start`.
+**opkg (OpenWrt 24.10 and older):**
+
+```bash
+echo "src/gz presence_detector https://rmoesbergen.github.io/openwrt-ha-device-tracker/ipk" \
+  >> /etc/opkg/customfeeds.conf
+opkg update
+opkg install presence-detector-sh                 # or: presence-detector (Python)
+```
+
+opkg has no per-feed or per-command way to accept an unsigned feed: it
+refuses it while `option check_signature` is set in `/etc/opkg.conf`, and
+removing that option turns off signature verification for the official
+feeds too. Until the feed is signed, opkg users are better off with the
+manual install below.
+
+Installing a package pulls in its dependencies from the official OpenWrt
+feeds, puts the script in `/usr/bin` and the init script in
+`/etc/init.d`, and installs a starter
+`/etc/config/presence-detector.settings.json`. Your edits to that file are
+kept on upgrade. Edit it, then
+`service presence-detector enable && service presence-detector start`.
 
 ### Option B: manual install
 

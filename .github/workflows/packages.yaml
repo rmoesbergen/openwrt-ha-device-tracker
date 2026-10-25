@@ -1,20 +1,21 @@
 name: Build package feed
 
 # Builds the presence-detector OpenWrt packages and publishes a custom
-# package feed (see issue #95, option 2). The packages are PKGARCH:=all
-# (pure scripts), so a single build per package-manager generation works on
-# every target arch - no per-arch matrix needed. We build one ipk feed
-# (23.05 stable, opkg) and one apk feed (snapshot, apk) so routers on either
-# generation can use the feed.
+# package feed to GitHub Pages (see issue #95, option 2).
 #
-# The feed is published to GitHub Pages. Users add the printed feed URL to
-# opkg/apk and then `opkg install presence-detector[-sh]` / `apk add ...`.
+# The packages are PKGARCH:=all (pure scripts), so one build per
+# package-manager generation works on every target arch:
+#   ipk feed - OpenWrt 24.10 SDK (opkg)
+#   apk feed - OpenWrt 25.12 SDK (apk)
 #
-# NOTE: the feed is currently UNSIGNED. To sign it, add a repository secret
-# with a usign/signify key (ipk: KEY_BUILD) and/or an apk private key
-# (PRIVATE_KEY), and pass them through to the build steps below. Unsigned
-# means users pass --no-check-signature (opkg) or -X / an allow-untrusted
-# flag (apk); documented in README.
+# The Makefile bundles its source from this checkout (no download, no
+# PKG_HASH), so the whole repository is mounted as the feed. PKG_VERSION is
+# stamped from the release tag below.
+#
+# NOTE: the feed is currently UNSIGNED. To sign it, add repository secrets
+# and pass them to the build step: KEY_BUILD (usign key, signs the ipk
+# feed) and/or PRIVATE_KEY (signs the apk feed). See README-lightweight.md
+# for what an unsigned feed means for users.
 
 on:
   push:
@@ -36,34 +37,47 @@ jobs:
       matrix:
         include:
           - name: ipk
-            arch: x86_64-23.05.5
+            arch: x86_64-openwrt-24.10
           - name: apk
-            arch: x86_64-SNAPSHOT
+            arch: x86_64-openwrt-25.12
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Stamp package version from tag
+        run: |
+          # On a tag push use the tag (v3.2.0 -> 3.2.0); on a manual run use
+          # the most recent tag, so versions always stay valid for apk.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(git describe --tags --abbrev=0 | sed 's/^v//')"
+          fi
+          echo "Packaging version ${VERSION}"
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" openwrt/presence-detector/Makefile
+          grep '^PKG_VERSION' openwrt/presence-detector/Makefile
 
       - name: Build packages + index
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}
           FEEDNAME: presence_detector
-          FEED_DIR: ${{ github.workspace }}/openwrt
-          PACKAGES: presence-detector presence-detector-sh
+          # One source package; it produces both presence-detector and
+          # presence-detector-sh.
+          PACKAGES: presence-detector
           INDEX: '1'
           V: s
 
       - name: Collect feed artifacts
         run: |
+          # Only our own feed directory - bin/ also holds index files for the
+          # SDK's other feeds, which must not end up in ours.
+          SRC=$(find bin/packages -mindepth 2 -maxdepth 2 -type d -name presence_detector)
+          [ -n "$SRC" ] || { echo "No presence_detector feed directory produced"; exit 1; }
           mkdir -p feed/${{ matrix.name }}
-          # bin/ layout differs slightly by generation; copy whatever package
-          # dirs the SDK produced (ipk under packages/, apk likewise) plus the
-          # generated index files.
-          find bin -type f \( -name '*.ipk' -o -name '*.apk' -o -name 'Packages*' -o -name 'index.json' -o -name 'packages.adb' -o -name '*.sig' \) \
-            -exec cp -v {} feed/${{ matrix.name }}/ \; || true
-          echo "=== collected ==="
-          ls -la feed/${{ matrix.name }}/
+          cp -v "$SRC"/* feed/${{ matrix.name }}/
+          ls feed/${{ matrix.name }}/*.${{ matrix.name }} >/dev/null || { echo "No .${{ matrix.name }} packages built"; exit 1; }
 
       - name: Upload feed artifact
         uses: actions/upload-artifact@v4
@@ -82,8 +96,8 @@ jobs:
           path: site
       - name: Lay out site
         run: |
+          # download-artifact nests under feed-<name>/; publish as /<name>/
           mkdir -p public
-          # download-artifact nests under feed-<name>/; flatten to /<name>/
           for d in site/feed-*; do
             n="${d##*/feed-}"
             mkdir -p "public/$n"
