@@ -1,4 +1,4 @@
 -r requirements.txt
 mypy==2.1.0
-black==26.5.1
+black==26.10.1
 pylint==4.0.5
