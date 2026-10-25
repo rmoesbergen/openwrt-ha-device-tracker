@@ -88,37 +88,31 @@ version) — both architecture-independent, so one feed works on every
 target. Install one or the other: they conflict, since both provide
 `/etc/init.d/presence-detector` and the same settings file.
 
-> **The feed is currently unsigned.** apk can use it with an extra flag;
-> opkg can't use it without disabling signature checks for *all* feeds —
-> see the notes below each section.
+Both feeds are signed. Install the feed's public key once, as shown below,
+so your package manager can verify it.
 
 **apk (OpenWrt 25.12 and newer):**
 
 ```bash
+wget -O /etc/apk/keys/presence-detector.pem \
+  https://rmoesbergen.github.io/openwrt-ha-device-tracker/apk/presence-detector.pem
 echo "https://rmoesbergen.github.io/openwrt-ha-device-tracker/apk/packages.adb" \
   >> /etc/apk/repositories.d/customfeeds.list
-apk --allow-untrusted update
-apk --allow-untrusted add presence-detector-sh    # or: presence-detector (Python)
+apk update
+apk add presence-detector-sh    # or: presence-detector (Python)
 ```
-
-Because the feed is unsigned, apk ignores it (`UNTRUSTED signature`)
-unless you pass `--allow-untrusted` — including on later
-`apk --allow-untrusted upgrade` runs, if you want updates from it.
 
 **opkg (OpenWrt 24.10 and older):**
 
 ```bash
+wget -O /tmp/presence-detector.pub \
+  https://rmoesbergen.github.io/openwrt-ha-device-tracker/ipk/presence-detector.pub
+opkg-key add /tmp/presence-detector.pub
 echo "src/gz presence_detector https://rmoesbergen.github.io/openwrt-ha-device-tracker/ipk" \
   >> /etc/opkg/customfeeds.conf
 opkg update
 opkg install presence-detector-sh                 # or: presence-detector (Python)
 ```
-
-opkg has no per-feed or per-command way to accept an unsigned feed: it
-refuses it while `option check_signature` is set in `/etc/opkg.conf`, and
-removing that option turns off signature verification for the official
-feeds too. Until the feed is signed, opkg users are better off with the
-manual install below.
 
 Installing a package pulls in its dependencies from the official OpenWrt
 feeds, puts the script in `/usr/bin` and the init script in
