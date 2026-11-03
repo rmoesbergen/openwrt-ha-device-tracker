@@ -7,6 +7,7 @@ A Wi-Fi device presence detector for Home Assistant that runs on OpenWRT
 
 import argparse
 import json
+import os
 import queue
 import signal
 import subprocess
@@ -108,6 +109,7 @@ class QueueItem:
         ADD = 1
         DELETE = 2
         QUIT = 3
+        SYNC = 4
 
     device: str
     interface: str
@@ -187,7 +189,9 @@ class PresenceDetector(Thread):
             self._registered_clients.clear()
         elif message.payload == b"online":
             self._logger.log("Home Assistant is back online")
-            self._do_full_sync()
+            # Don't sync here: this runs in paho's network thread, and an
+            # exception in it would end that thread for good (#106).
+            self._queue.put(QueueItem("sync", "", QueueItem.Action.SYNC))
 
     def _publish(self, topic: str, data: str, retain=False) -> bool:
         self._logger.log(f"Publishing to {topic}: {data}", True)
@@ -383,6 +387,11 @@ class PresenceDetector(Thread):
                 self._queue.task_done()
                 break
 
+            if item.action == QueueItem.Action.SYNC:
+                self._do_full_sync()
+                self._queue.task_done()
+                continue
+
             if self._ha_seen(item.device, item.action == QueueItem.Action.ADD):
                 if mq_is_offline:
                     # We're back online -> process backlog
@@ -471,6 +480,13 @@ def main():
     signal.signal(signal.SIGINT, detector.stop)
 
     while not detector.stopped:
+        if not detector.is_alive():
+            # The main loop died on an unhandled exception (its traceback is
+            # already on stderr). Exit so procd respawns us, instead of
+            # staying up without publishing anything. os._exit because the
+            # ubus watcher threads are blocked reading and would keep a
+            # normal exit waiting.
+            os._exit(1)
         time.sleep(1)
 
 
