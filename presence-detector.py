@@ -438,6 +438,10 @@ class UbusWatcher(Thread):
             # Startup OK, start reading stdout
             while not self._killed:
                 line = ubus.stdout.readline()
+                if not line:
+                    # EOF: ubus subscribe exited (e.g. the hostapd object
+                    # went away on a wifi restart) -> resubscribe (#110)
+                    break
                 event = {}
                 try:
                     event = json.loads(line)
