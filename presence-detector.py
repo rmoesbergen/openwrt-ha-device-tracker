@@ -332,6 +332,14 @@ class PresenceDetector(Thread):
         """Perform a full sync of all current online devices compared to last time"""
         self._registered_clients = set()
         seen_now = set(self._get_all_online_devices())
+        # Rebuild the per-interface online sets from what's really connected
+        # now. A device can leave an interface without any disassoc event
+        # (#108); its stale entry would otherwise make set_device_away
+        # believe it's still connected there and ignore every away for it.
+        for interface in self._settings.interfaces:
+            self._online_clients[interface] = {
+                client for intf, client in seen_now if intf == interface
+            }
         is_first_sync = self._last_seen_clients is None
         away = (self._last_seen_clients or set()) - seen_now
         self._last_seen_clients = seen_now
