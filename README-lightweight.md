@@ -192,7 +192,7 @@ excludes `presence-detector.settings.json` and
 `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`,
 `mqtt_retain_state`, `interfaces`, `filter_is_denylist`, `filter`, `params`,
 `ap_name`, `location`, `away`, `fallback_sync_interval`, `away_debounce_seconds`,
-`source_type`, `debug`.
+`source_type`, `debug`, plus the shell-only `client_source` (below).
 
 Notes / minor differences:
 
@@ -216,6 +216,24 @@ Notes / minor differences:
   `null` so Home Assistant shows the name once rather than doubled.
 * **`interfaces`**: As with the Python version, leave empty (`[]`) to
   auto-detect all `hostapd.*` interfaces.
+* **`client_source`** (shell version only): where connected clients are read
+  from. `"hostapd"` (the default) uses hostapd's ubus API, with realtime
+  `assoc`/`disassoc` events. `"iwinfo"` is for firmwares that don't use
+  hostapd and so have no `hostapd.*` ubus objects, e.g. GL.iNet's stock
+  firmware with MediaTek's proprietary `mt_wifi` driver. It reads clients
+  with `iwinfo <iface> assoclist` and has no realtime events: the periodic
+  full sync is the only update source, so arrivals and departures show up
+  within one sync cycle, which is `fallback_sync_interval` (30 if unset)
+  plus however long a sync takes. That's under a second on a GL.iNet
+  MT6000/MT3000, but about 11s on a slow router like a TP-Link WDR4900,
+  since every sync republishes each device. It needs an explicit `interfaces` list of
+  network interface names (check `iwinfo`), and `away_debounce_seconds` has
+  no effect. Example:
+  ```json
+  "interfaces": ["ra0", "rax0"],
+  "client_source": "iwinfo",
+  "fallback_sync_interval": 15
+  ```
 * **`ap_name`**: Prefixes the entity's **`unique_id` and MQTT topic** with the
   AP name (e.g. topic `homeassistant/device_tracker/cocina_aa_bb_.../state`,
   `unique_id: cocina_aa_bb_...`). It does **not** change the friendly `name`.
@@ -345,6 +363,7 @@ daemon.debug presence-detector[1234]: Publishing to homeassistant/device_tracker
 | MQTT auto-discovery | ✅ | ✅ |
 | HA online/offline recovery | ✅ | ✅ |
 | Fallback periodic sync | ✅ | ✅ |
+| Firmwares without hostapd (`iwinfo` polling) | ✅ `client_source: "iwinfo"` | ❌ |
 | Arbitrary `params` passthrough | ✅ with `ucode` (22.03+); name+icon on minimal builds | Any discovery key |
 
 For most single/dual-radio access points the shell version is fully
