@@ -69,6 +69,13 @@ load_settings() {
 	FALLBACK_SYNC_INTERVAL=$(get_setting '@.fallback_sync_interval' '0')
 	AWAY_DEBOUNCE_SECONDS=$(get_setting '@.away_debounce_seconds' '0')
 	SOURCE_TYPE=$(get_setting '@.source_type' 'router')
+	# Where connected clients are read from:
+	#   hostapd - `ubus call hostapd.X get_clients` + real-time `ubus subscribe`
+	#   iwinfo  - `iwinfo X assoclist`, polled every fallback_sync_interval
+	#             seconds; for firmwares without hostapd's ubus API (e.g. GL.iNet
+	#             stock firmware with the MediaTek mt_wifi driver). Needs
+	#             explicit interfaces (e.g. ["ra0", "rax0"]).
+	CLIENT_SOURCE=$(get_setting '@.client_source' 'hostapd')
 	DEBUG=$(get_setting '@.debug' 'false')
 	[ "$DEBUG" = "true" ] && DEBUG=1 || DEBUG=0
 
@@ -81,13 +88,19 @@ load_settings() {
 	# detection at startup always reflects the current set - no in-process
 	# re-scanning needed.
 	INTERFACES=$(get_array '@.interfaces')
-	if [ -z "$INTERFACES" ]; then
+	if [ -z "$INTERFACES" ] && [ "$CLIENT_SOURCE" != "iwinfo" ]; then
 		INTERFACES=$(ubus list 'hostapd.*' 2>/dev/null)
 	fi
 
 	if [ -z "$INTERFACES" ]; then
 		log "No wifi interfaces found or configured!"
 		exit 1
+	fi
+
+	if [ "$CLIENT_SOURCE" = "iwinfo" ] && ! [ "$FALLBACK_SYNC_INTERVAL" -gt 0 ] 2>/dev/null; then
+		# Polling is the only source of updates in this mode.
+		FALLBACK_SYNC_INTERVAL=30
+		log "client_source iwinfo needs fallback_sync_interval > 0; using 30s"
 	fi
 
 	# Detect ucode (present on OpenWRT 22.03+). When available we build the
@@ -375,6 +388,15 @@ get_all_online_devices() {
 	# Prints "interface mac" pairs for every currently connected client.
 	local interface
 	for interface in $INTERFACES; do
+		if [ "$CLIENT_SOURCE" = "iwinfo" ]; then
+			iwinfo "$interface" assoclist 2>/dev/null | \
+				grep -oE '^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}' | tr 'A-Z' 'a-z' | \
+				sort -u | \
+				while read -r mac; do
+					[ -n "$mac" ] && echo "$interface $mac"
+				done
+			continue
+		fi
 		ubus call "$interface" get_clients 2>/dev/null | \
 			grep -o '"[0-9a-fA-F:]\{17\}"' | tr -d '"' | tr 'A-Z' 'a-z' | \
 			sort -u | \
@@ -684,9 +706,11 @@ main() {
 	watch_ha_status &
 	CHILD_PIDS="$CHILD_PIDS $!"
 
-	# Start a watcher per interface
+	# Start a watcher per interface (none in iwinfo mode: there are no
+	# events to subscribe to, the main loop's periodic sync does the work)
 	local interface
 	for interface in $INTERFACES; do
+		[ "$CLIENT_SOURCE" = "iwinfo" ] && break
 		watch_interface "$interface" &
 		CHILD_PIDS="$CHILD_PIDS $!"
 	done
@@ -716,7 +740,12 @@ main() {
 			if [ "$elapsed" -ge "$FALLBACK_SYNC_INTERVAL" ]; then
 				elapsed=0
 				[ -f "$RUNDIR/.stop" ] && break
-				do_full_sync
+				if [ "$CLIENT_SOURCE" = "iwinfo" ]; then
+					# Polling is the only update source: never skip it.
+					do_full_sync 1
+				else
+					do_full_sync
+				fi
 			fi
 		fi
 	done
