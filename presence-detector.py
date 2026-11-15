@@ -127,10 +127,8 @@ class PresenceDetector(Thread):
         self._watchers: list[UbusWatcher] = []
         self._killed = False
         self._last_seen_clients: set[tuple[str, str]] | None = None
-        self._online_clients: dict[str, set[str]] = {}
+        self._online_clients: set[tuple[str, str]] = set()
         self._registered_clients: set[str] = set()
-        for interface in self._settings.interfaces:
-            self._online_clients[interface] = set()
         self._connect_to_mqtt()
 
     def _connect_to_mqtt(self):
@@ -250,10 +248,9 @@ class PresenceDetector(Thread):
         """Mark a client as away in HA"""
         if not self._should_handle_device(device):
             return
-        if device in self._online_clients[interface]:
-            self._online_clients[interface].remove(device)
+        self._online_clients.discard((interface, device))
         for intf in set(self._settings.interfaces) - {interface}:
-            if device in self._online_clients[intf]:
+            if (intf, device) in self._online_clients:
                 # Device is still connected to another interface -> ignore
                 self._logger.log(
                     f"Device {device} still connected to {intf}, ignoring away event.",
@@ -268,7 +265,7 @@ class PresenceDetector(Thread):
         if not self._should_handle_device(device):
             return
         self._queue.put(QueueItem(device, interface, QueueItem.Action.ADD))
-        self._online_clients[interface].add(device)
+        self._online_clients.add((interface, device))
         self._logger.log(
             f"Device {device} on {interface} is now at {self._settings.location}"
         )
@@ -332,14 +329,11 @@ class PresenceDetector(Thread):
         """Perform a full sync of all current online devices compared to last time"""
         self._registered_clients = set()
         seen_now = set(self._get_all_online_devices())
-        # Rebuild the per-interface online sets from what's really connected
-        # now. A device can leave an interface without any disassoc event
-        # (#108); its stale entry would otherwise make set_device_away
-        # believe it's still connected there and ignore every away for it.
-        for interface in self._settings.interfaces:
-            self._online_clients[interface] = {
-                client for intf, client in seen_now if intf == interface
-            }
+        # Rebuild the online set from what's really connected now. A device
+        # can leave an interface without any disassoc event (#108); its stale
+        # entry would otherwise make set_device_away believe it's still
+        # connected there and ignore every away for it.
+        self._online_clients = set(seen_now)
         is_first_sync = self._last_seen_clients is None
         away = (self._last_seen_clients or set()) - seen_now
         self._last_seen_clients = seen_now
