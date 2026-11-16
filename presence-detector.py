@@ -366,20 +366,22 @@ class PresenceDetector(Thread):
         self.start_watchers()
 
         mq_is_offline = False
-        # Enable a queue timeout if fallback_sync interval is set
-        queue_timeout = (
-            self._settings.fallback_sync_interval
-            if self._settings.fallback_sync_interval > 0
-            else None
-        )
+        # With fallback_sync_interval set, run a full sync every that many
+        # seconds. Track a deadline rather than relying on the queue timing
+        # out: on a busy AP events keep arriving, so a get() timeout alone
+        # might never fire.
+        interval = self._settings.fallback_sync_interval
+        next_sync = time.monotonic() + interval
 
         # The main (sync) polling loop
         while not self._killed:
-            try:
-                item: QueueItem = self._queue.get(timeout=queue_timeout)
-            except queue.Empty:
-                # Perform a periodic full sync
+            if interval > 0 and time.monotonic() >= next_sync:
                 self._do_full_sync()
+                next_sync = time.monotonic() + interval
+            timeout = max(0, next_sync - time.monotonic()) if interval > 0 else None
+            try:
+                item: QueueItem = self._queue.get(timeout=timeout)
+            except queue.Empty:
                 continue
 
             if item.action == QueueItem.Action.QUIT:
