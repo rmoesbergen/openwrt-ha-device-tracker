@@ -342,7 +342,6 @@ class PresenceDetector(Thread):
         # entry would otherwise make set_device_away believe it's still
         # connected there and ignore every away for it.
         self._online_clients = set(seen_now)
-        is_first_sync = self._last_seen_clients is None
         away = (self._last_seen_clients or set()) - seen_now
         self._last_seen_clients = seen_now
         for interface, client in seen_now:
@@ -351,23 +350,21 @@ class PresenceDetector(Thread):
         for interface, client in away:
             self.set_device_away(interface, client)
 
-        if is_first_sync:
-            # First-sync fix for #81: without this, a params-listed device
-            # that's currently offline but was previously marked home via a
-            # retained MQTT message stays stuck home forever.
-            seen_macs = {client for _interface, client in seen_now}
-            for device in self._settings.params:
-                if device in seen_macs or not self._should_handle_device(device):
-                    continue
-                self._logger.log(
-                    f"Device {device} is away (first sync, no prior state)", True
-                )
-                # Call _ha_seen directly rather than set_device_away: the
-                # latter's per-interface bookkeeping (self._online_clients)
-                # is keyed by real interface names and is only meaningful
-                # for devices that were actually observed on one, which by
-                # definition isn't the case here.
-                self._ha_seen(device, seen=False)
+        # A params-listed device that's offline is away, even if it was never
+        # seen here: otherwise one that left silently (no disassoc, common on
+        # iOS) before a restart, or that only ever connected to another AP,
+        # keeps a stale retained "home" forever (#81). Done on every sync,
+        # not just the first, like the shell version.
+        seen_macs = {client for _interface, client in seen_now}
+        for device in self._settings.params:
+            if device in seen_macs or not self._should_handle_device(device):
+                continue
+            self._logger.log(f"Device {device} is away (not currently online)", True)
+            # Call _ha_seen directly rather than set_device_away: the
+            # latter's per-interface bookkeeping (self._online_clients)
+            # is only meaningful for devices that were actually observed on
+            # an interface, which isn't the case here.
+            self._ha_seen(device, seen=False)
 
     def _flush_pending_away(self, pending_away: dict[str, float]) -> None:
         """Publish away for every debounced device whose deadline has passed"""
