@@ -59,6 +59,7 @@ class Settings:
             "location": "home",
             "away": "not_home",
             "fallback_sync_interval": 0,
+            "away_debounce_seconds": 0,
             "source_type": "router",
             "debug": False,
         }
@@ -258,7 +259,14 @@ class PresenceDetector(Thread):
                 )
                 return
         self._queue.put(QueueItem(device, interface, QueueItem.Action.DELETE))
-        self._logger.log(f"Device {device} on {interface} is now away")
+        if self._settings.away_debounce_seconds > 0:
+            self._logger.log(
+                f"Device {device} on {interface} left; debouncing "
+                f"{self._settings.away_debounce_seconds}s before marking away",
+                True,
+            )
+        else:
+            self._logger.log(f"Device {device} on {interface} is now away")
 
     def set_device_home(self, interface: str, device: str) -> None:
         """Add client to the 'add' queue"""
@@ -361,6 +369,17 @@ class PresenceDetector(Thread):
                 # definition isn't the case here.
                 self._ha_seen(device, seen=False)
 
+    def _flush_pending_away(self, pending_away: dict[str, float]) -> None:
+        """Publish away for every debounced device whose deadline has passed"""
+        now = time.monotonic()
+        for device, deadline in list(pending_away.items()):
+            if now >= deadline:
+                del pending_away[device]
+                self._logger.log(f"Device {device} is now away (debounced)")
+                if not self._ha_seen(device, False):
+                    # MQTT offline: retry shortly
+                    pending_away[device] = now + 5
+
     def run(self) -> None:
         """Main loop for the presence detector"""
         self._do_full_sync()
@@ -375,13 +394,24 @@ class PresenceDetector(Thread):
         # might never fire.
         interval = self._settings.fallback_sync_interval
         next_sync = time.monotonic() + interval
+        # away_debounce_seconds: a device that disassociates is only marked
+        # away if it doesn't reassociate (on any interface) within that many
+        # seconds, so roaming between bands or a brief drop doesn't flap
+        # home -> away -> home in HA. Pending aways live only in this
+        # thread: device -> deadline.
+        debounce = self._settings.away_debounce_seconds
+        pending_away: dict[str, float] = {}
 
         # The main (sync) polling loop
         while not self._killed:
             if interval > 0 and time.monotonic() >= next_sync:
                 self._do_full_sync()
                 next_sync = time.monotonic() + interval
-            timeout = max(0, next_sync - time.monotonic()) if interval > 0 else None
+            self._flush_pending_away(pending_away)
+            deadlines = list(pending_away.values())
+            if interval > 0:
+                deadlines.append(next_sync)
+            timeout = max(0, min(deadlines) - time.monotonic()) if deadlines else None
             try:
                 item: QueueItem = self._queue.get(timeout=timeout)
             except queue.Empty:
@@ -393,6 +423,14 @@ class PresenceDetector(Thread):
 
             if item.action == QueueItem.Action.SYNC:
                 self._do_full_sync()
+                self._queue.task_done()
+                continue
+
+            if item.action == QueueItem.Action.ADD:
+                # Reappeared before its away was published: cancel it.
+                pending_away.pop(item.device, None)
+            elif debounce > 0:
+                pending_away[item.device] = time.monotonic() + debounce
                 self._queue.task_done()
                 continue
 

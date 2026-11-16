@@ -62,6 +62,7 @@ The settings file on your OpenWRT device looks like this:
   "location": "home",
   "away": "not_home",
   "fallback_sync_interval": 0,
+  "away_debounce_seconds": 0,
   "debug": false
 }
 ```
@@ -83,6 +84,7 @@ For info on how these params appear in HA see [below](#optional-home-assistant-c
 * away: Custom location name to be sent when a device is no longer connected. Default: "not_home"
 * fallback_sync_interval: Interval in seconds to perform a full sync of online/offline devices to HA. Enable this as a fallback option if you have issues with devices not being detected as 'offline' when they go out of WiFi range.
 **NOTE**: this will perform a 'ubus get clients' call every X seconds, which could increase load on the router. Default 0 (disabled)
+* away_debounce_seconds: Wait this many seconds after a device disconnects before marking it away, and cancel that if it reconnects (to any interface) in the meantime. Avoids home/away/home flapping when a device roams between bands or briefly drops. Default 0 (disabled)
 * source_type: This is the type of device that gets sent to HA to represent the tracking device. It defaults to 'router', but can also be set to 'gps' to allow for different zones/locations to work.
 * debug: Enable or disable debugging (prints state information on stdout when enabled). Default: false
 
