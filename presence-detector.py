@@ -461,16 +461,22 @@ class UbusWatcher(Thread):
         self._on_leave = on_leave
         self._interface = interface
         self._killed = False
+        self._ubus: subprocess.Popen | None = None
 
     def stop(self):
         """Stops this watcher thread"""
         self._killed = True
+        # Unblock the readline() in run(): without this the thread (and so
+        # the whole process) never exits on SIGTERM, procd kills it only
+        # after term_timeout, and the ubus child is left behind.
+        if self._ubus is not None:
+            self._ubus.terminate()
 
     def run(self) -> None:
         """Main loop for the ubus event watcher thread"""
         while not self._killed:
             # pylint: disable=consider-using-with
-            ubus = subprocess.Popen(
+            ubus = self._ubus = subprocess.Popen(
                 ["ubus", "subscribe", self._interface],
                 stdout=subprocess.PIPE,
                 text=True,

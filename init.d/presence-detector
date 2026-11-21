@@ -6,7 +6,47 @@ USE_PROCD=1
 NAME=devices
 PROG=/etc/config/presence-detector.py
 
+HOTPLUG_HOOK=/etc/hotplug.d/net/30-presence-detector
+
+# Install a hotplug hook that restarts us when a Wi-Fi AP interface appears
+# or disappears. presence-detector enumerates hostapd.* interfaces once at
+# startup, so a radio that comes up late (slow boot, DFS CAC, a wifi
+# restart, a newly added SSID) would otherwise never be watched. See
+# upstream issues #90 and #97. Same hook as init.d/presence-detector-sh.
+install_hotplug_hook() {
+	mkdir -p /etc/hotplug.d/net 2>/dev/null
+	cat > "$HOTPLUG_HOOK" <<'HOOK'
+#!/bin/sh
+# Managed by /etc/init.d/presence-detector - do not edit by hand.
+# Restart presence-detector when a Wi-Fi AP interface (phy*-ap*) is added or
+# removed, so its one-shot startup interface detection stays current.
+case "$DEVICENAME" in
+	phy*-ap*) ;;
+	*) return 0 ;;
+esac
+[ "$ACTION" = "add" ] || [ "$ACTION" = "remove" ] || return 0
+[ -x /etc/init.d/presence-detector ] || return 0
+/etc/init.d/presence-detector enabled || return 0
+PENDING=/var/run/presence-detector.hotplug_pending
+mkdir -p /var/run 2>/dev/null
+# Coalesce a burst (a wifi down/up fires remove+add for every AP interface
+# within a few seconds) into a single restart: the last event in the settle
+# window wins, earlier ones bail when they see a newer marker.
+stamp=$(date +%s%N 2>/dev/null || date +%s)
+echo "$stamp" > "$PENDING"
+(
+	sleep 5
+	[ "$(cat "$PENDING" 2>/dev/null)" = "$stamp" ] || exit 0
+	rm -f "$PENDING" 2>/dev/null
+	logger -t presence-detector "AP interface change ($ACTION $DEVICENAME); restarting to refresh watched interfaces"
+	/etc/init.d/presence-detector restart
+) &
+HOOK
+	chmod +x "$HOTPLUG_HOOK" 2>/dev/null
+}
+
 start_service() {
+	install_hotplug_hook
 	procd_open_instance
 	procd_set_param command "$PROG"
 	procd_set_param stdout 1
@@ -14,4 +54,10 @@ start_service() {
 	procd_set_param respawn
 	procd_set_param term_timeout 300
 	procd_close_instance
+}
+
+# A `restart` (e.g. from the hook) runs stop then start, and start
+# reinstalls the hook, so this is only a real teardown on stop/disable.
+stop_service() {
+	rm -f "$HOTPLUG_HOOK" 2>/dev/null
 }
