@@ -273,9 +273,13 @@ class PresenceDetector(Thread):
         if not self._should_handle_device(device):
             return
         self._queue.put(QueueItem(device, interface, QueueItem.Action.ADD))
+        # Only log at info level when this is news: the full sync re-marks
+        # every online device home each time, which would flood the log.
+        already_online = (interface, device) in self._online_clients
         self._online_clients.add((interface, device))
         self._logger.log(
-            f"Device {device} on {interface} is now at {self._settings.location}"
+            f"Device {device} on {interface} is now at {self._settings.location}",
+            already_online,
         )
 
     def _get_all_online_devices(self) -> list[tuple[str, str]]:
